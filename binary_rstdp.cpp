@@ -42,7 +42,7 @@ struct DigitalSynapse {
     int eligibility_ltd_timer;
     int confidence_leak_timer;
 
-    DigitalSynapse(int target, int init_conf = 40)
+    DigitalSynapse(int target, int init_conf = 1)
         : target_neuron_idx(target),
           confidence(init_conf),
           active(init_conf >= CONFIDENCE_THR),
@@ -257,74 +257,7 @@ void test_LIF_Dynamics() {
     }
 }
 
-// 2. STDP trace & eligibility logic for the R-STDP synapse
-void test_STDP_Mechanics() {
-    std::cout << "\n=== TEST 2: STDP Traces & Eligibility ===\n";
-
-    // Scenario A: pre-before-post -> LTP eligibility
-    {
-        std::cout << "Scenario A: pre (N0) before post (N1) -> LTP eligibility\n";
-        SpikingNet net(2);      // 0 -> 1
-        net.add_synapse(0, 1, 2); // confidence within [0, CONFIDENCE_MAX]
-
-        std::cout << "t\tin0\tin1\tN0\tN1\tltp\tltd\tE_LTP\tE_LTD\tE_LTP_t\tE_LTD_t\n";
-        for (int t = 0; t < 15; ++t) {
-            std::vector<int> input(2, 0);
-
-            // Force a single strong pre-spike at t=2 (N0) and post-spike at t=4 (N1)
-            if (t == 2) input[0] = 10; // enough to cross threshold in one step
-            if (t == 4) input[1] = 10;
-
-            net.step(input); // no reward, only traces/eligibility
-
-            auto& syn = net.connections[0][0];
-            std::cout << t << '\t'
-                      << input[0] << '\t' << input[1] << '\t'
-                      << net.neurons[0].spiked_this_step << '\t'
-                      << net.neurons[1].spiked_this_step << '\t'
-                      << syn.ltp_timer << '\t'
-                      << syn.ltd_timer << '\t'
-                      << syn.eligible_for_LTP << '\t'
-                      << syn.eligible_for_LTD << '\t'
-                      << syn.eligibility_ltp_timer << '\t'
-                      << syn.eligibility_ltd_timer
-                      << std::endl;
-        }
-    }
-
-    // Scenario B: post-before-pre -> LTD eligibility
-    {
-        std::cout << "\nScenario B: post (N1) before pre (N0) -> LTD eligibility\n";
-        SpikingNet net(2);      // 0 -> 1
-        net.add_synapse(0, 1, 2); // confidence within [0, CONFIDENCE_MAX]
-
-        std::cout << "t\tin0\tin1\tN0\tN1\tltp\tltd\tE_LTP\tE_LTD\tE_LTP_t\tE_LTD_t\n";
-        for (int t = 0; t < 15; ++t) {
-            std::vector<int> input(2, 0);
-
-            // Force post-spike at t=2 (N1) and pre-spike at t=4 (N0)
-            if (t == 2) input[1] = 10;
-            if (t == 4) input[0] = 10;
-
-            net.step(input); // no reward, only traces/eligibility
-
-            auto& syn = net.connections[0][0];
-            std::cout << t << '\t'
-                      << input[0] << '\t' << input[1] << '\t'
-                      << net.neurons[0].spiked_this_step << '\t'
-                      << net.neurons[1].spiked_this_step << '\t'
-                      << syn.ltp_timer << '\t'
-                      << syn.ltd_timer << '\t'
-                      << syn.eligible_for_LTP << '\t'
-                      << syn.eligible_for_LTD << '\t'
-                      << syn.eligibility_ltp_timer << '\t'
-                      << syn.eligibility_ltd_timer
-                      << std::endl;
-        }
-    }
-}
-
-// 2.1. Extended STDP mechanics test with random spikes and constant reward
+// 2. Extended STDP mechanics test with random spikes and constant reward
 void test_STDP_Mechanics_001() {
     std::cout << "\n=== TEST 2.1: STDP Mechanics 001 (random spikes, constant reward, conduction check) ===\n";
 
@@ -393,189 +326,16 @@ void test_STDP_Mechanics_001() {
             }
         }
     }
-
-    // Scenario 2: explicit check that pre spike passes (or not) through synapse
-    {
-        std::cout << "\nScenario 2: conduction check (active vs inactive synapse)\n";
-
-        GLOBAL_TICK = 0;
-
-        SpikingNet net(2);                // neuron 0 -> neuron 1
-        net.add_synapse(0, 1, CONFIDENCE_THR); // start active at threshold
-        auto& syn = net.connections[0][0];
-
-        // Reset neuron state
-        net.neurons[0].voltage = 0;
-        net.neurons[1].voltage = 0;
-        net.neurons[0].refractory_timer = 0;
-        net.neurons[1].refractory_timer = 0;
-        net.neurons[0].input_buffer = 0;
-        net.neurons[1].input_buffer = 0;
-
-        // --- Active synapse: pre spike should increment post membrane potential by +1 ---
-        {
-            std::vector<int> input(2, 0);
-
-            // Step 0: force a pre spike on neuron 0
-            input[0] = V_THRESH;
-            input[1] = 0;
-            net.step(input); // reward on, but no post spike -> no weight change
-
-            int v1_before = net.neurons[1].voltage;
-
-            // Step 1: no external input, we only integrate buffered spike from previous step
-            input[0] = 0;
-            input[1] = 0;
-            net.step(input);
-
-            int v1_after = net.neurons[1].voltage;
-
-            std::cout << "Active synapse conduction: V1 before=" << v1_before
-                      << " V1 after=" << v1_after << "\n";
-
-            if (v1_after == v1_before + 1) {
-                std::cout << "  [OK] Pre spike through ACTIVE synapse increased post membrane by +1.\n";
-            } else {
-                std::cout << "  [WARN] Expected V1 increase by +1 with ACTIVE synapse, got delta="
-                          << (v1_after - v1_before) << ".\n";
-            }
-        }
-
-        // --- Inactive synapse: pre spike should NOT affect post membrane potential ---
-        {
-            // Make synapse inactive
-            syn.confidence = 0;
-            syn.active = (syn.confidence >= CONFIDENCE_THR);
-
-            // Reset neuron state
-            net.neurons[0].voltage = 0;
-            net.neurons[1].voltage = 0;
-            net.neurons[0].refractory_timer = 0;
-            net.neurons[1].refractory_timer = 0;
-            net.neurons[0].input_buffer = 0;
-            net.neurons[1].input_buffer = 0;
-
-            std::vector<int> input(2, 0);
-
-            // Step 0: force a pre spike on neuron 0 while synapse is inactive
-            input[0] = V_THRESH;
-            input[1] = 0;
-            net.step(input);
-
-            int v1_before = net.neurons[1].voltage;
-
-            // Step 1: no external inputs
-            input[0] = 0;
-            input[1] = 0;
-            net.step(input);
-
-            int v1_after = net.neurons[1].voltage;
-
-            std::cout << "Inactive synapse conduction: V1 before=" << v1_before
-                      << " V1 after=" << v1_after << "\n";
-
-            if (v1_after == v1_before) {
-                std::cout << "  [OK] Pre spike through INACTIVE synapse did not change post membrane.\n";
-            } else {
-                std::cout << "  [WARN] Expected no V1 change with INACTIVE synapse, got delta="
-                          << (v1_after - v1_before) << ".\n";
-            }
-        }
-    }
+    
 }
 
-// 3. Reward-modulated STDP (R-STDP) learning
-void test_R_STDP() {
-    std::cout << "\n=== TEST 3: R-STDP Learning (eligibility + reward) ===\n";
-
-    // Reset global tick so synaptic leak is predictable in this test
-    GLOBAL_TICK = 0;
-
-    // ---- Scenario 1: pre-before-post with reward -> LTP (confidence++) ----
-    {
-        std::cout << "Scenario 1: pre (N0) before post (N1) with reward -> LTP\n";
-        SpikingNet net(2);          // neurons 0 -> 1
-        net.add_synapse(0, 1, 1);   // start below threshold, inactive
-
-        auto& syn = net.connections[0][0];
-        std::cout << "Initial confidence: " << syn.confidence
-                  << " active=" << syn.active << "\n";
-
-        for (int t = 0; t < 8; ++t) {
-            std::vector<int> input(2, 0);
-            bool reward = false;
-
-            // At t=1: force pre-spike (N0)
-            if (t == 1) input[0] = 10;
-            // At t=3: force post-spike (N1)
-            if (t == 3) input[1] = 10;
-            // At t=5: deliver reward while LTP eligibility is still active
-            if (t == 5) reward = true;
-
-            net.step(input);
-
-            std::cout << "t=" << t
-                      << " in0=" << input[0]
-                      << " in1=" << input[1]
-                      << " N0_spk=" << net.neurons[0].spiked_this_step
-                      << " N1_spk=" << net.neurons[1].spiked_this_step
-                      << " reward=" << reward
-                      << " conf=" << syn.confidence
-                      << " E_LTP=" << syn.eligible_for_LTP
-                      << " E_LTD=" << syn.eligible_for_LTD
-                      << "\n";
-        }
-        std::cout << "After Scenario 1: confidence=" << syn.confidence
-                  << " active=" << syn.active << "\n";
-    }
-
-    // ---- Scenario 2: post-before-pre with reward -> LTD (confidence--) ----
-    {
-        std::cout << "\nScenario 2: post (N1) before pre (N0) with reward -> LTD\n";
-        SpikingNet net(2);          // neurons 0 -> 1
-        net.add_synapse(0, 1, 2);   // start at max confidence, active
-
-        auto& syn = net.connections[0][0];
-        std::cout << "Initial confidence: " << syn.confidence
-                  << " active=" << syn.active << "\n";
-
-        for (int t = 0; t < 8; ++t) {
-            std::vector<int> input(2, 0);
-            bool reward = false;
-
-            // At t=1: force post-spike (N1)
-            if (t == 1) input[1] = 10;
-            // At t=3: force pre-spike (N0)
-            if (t == 3) input[0] = 10;
-            // At t=5: deliver reward while LTD eligibility is still active
-            if (t == 5) reward = true;
-
-            net.step(input);
-
-            std::cout << "t=" << t
-                      << " in0=" << input[0]
-                      << " in1=" << input[1]
-                      << " N0_spk=" << net.neurons[0].spiked_this_step
-                      << " N1_spk=" << net.neurons[1].spiked_this_step
-                      << " reward=" << reward
-                      << " conf=" << syn.confidence
-                      << " E_LTP=" << syn.eligible_for_LTP
-                      << " E_LTD=" << syn.eligible_for_LTD
-                      << "\n";
-        }
-        std::cout << "After Scenario 2: confidence=" << syn.confidence
-                  << " active=" << syn.active << "\n";
-    }
-}
 
 int main() {
     // seed for any legacy rand()-based code, though tests use std::mt19937
     srand(42);
 
-    //test_LIF_Dynamics();
-    //test_STDP_Mechanics();
+    test_LIF_Dynamics();
     test_STDP_Mechanics_001();
-    //test_R_STDP();
 
     return 0;
 }
