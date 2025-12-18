@@ -16,19 +16,20 @@ const int REFRACTORY_PERIOD = 1;
 const int MEMBRANE_DECAY_PERIOD = 1000;
 
 // --- Synapse / R-STDP parameters ---
-const int CONFIDENCE_MAX = 2;
-const int CONFIDENCE_THR = 2;
+const int CONFIDENCE_MAX = 3;
+const int CONFIDENCE_THR = 3;
 const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 100;
-const int CONFIDENCE_LEAK_PERIOD = 1000;
+const int CONFIDENCE_LEAK_PERIOD = 10000;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
 const int BRAIN_SIZE = 36; // 4 sensors + 2 motors + 30 hidden
-const int CONSTANT_REWARD_DURATION = 500000;
+const int CONSTANT_REWARD_DURATION = 5000;
 const double CONNECTION_DENSITY = 0.6;
-const int CONFIDENCE_INIT_LOW = 1;
-const int CONFIDENCE_INIT_HIGH = 2;
+const int CONFIDENCE_INIT_LOW = 0;
+const int CONFIDENCE_INIT_HIGH = 3;
+const int RANDOM_ACTIVITY_COUNT = 3;
 
 // --- Data structures ---
 
@@ -410,6 +411,13 @@ int main() {
       std::vector<int> net_input(BRAIN_SIZE, 0);
       for (int i = 0; i < 4; ++i)
         net_input[i] = sensors[i];
+
+      // 1.5. Random wandering activity
+      std::uniform_int_distribution<int> rand_neuron_dist(0, BRAIN_SIZE - 1);
+      for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
+        int rand_idx = rand_neuron_dist(rng);
+        net_input[rand_idx]++;
+      }
 
       // 2. Brain Step
       // Note: In original code, step used global REWARD which was updated at
