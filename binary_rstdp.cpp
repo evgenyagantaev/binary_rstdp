@@ -413,7 +413,7 @@ int main() {
         net_input[i] = sensors[i];
 
       // 1.5. Random wandering activity
-      std::uniform_int_distribution<int> rand_neuron_dist(0, BRAIN_SIZE - 1);
+      std::uniform_int_distribution<int> rand_neuron_dist(6, BRAIN_SIZE - 1);
       for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
         int rand_idx = rand_neuron_dist(rng);
         net_input[rand_idx]++;
