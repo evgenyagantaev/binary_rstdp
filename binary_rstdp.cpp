@@ -99,7 +99,12 @@ public:
           continue;
 
         if (dist(rng) < density) {
-          connections[i].emplace_back(j, conf_dist(rng));
+          int init_conf = conf_dist(rng);
+          // Fixed synapses: sensory outgoing (0-3) or motor incoming (4-5)
+          if (i < 4 || (j >= 4 && j < 6)) {
+            init_conf = CONFIDENCE_MAX;
+          }
+          connections[i].emplace_back(j, init_conf);
         }
       }
     }
@@ -144,65 +149,73 @@ public:
           neurons[syn.target_neuron_idx].input_buffer += 1;
         }
 
-        // Decay timers
-        if (syn.ltp_timer > 0)
-          syn.ltp_timer--;
-        if (syn.ltd_timer > 0)
-          syn.ltd_timer--;
+        bool is_fixed = (i < 4) || (syn.target_neuron_idx >= 4 &&
+                                    syn.target_neuron_idx < 6);
 
-        if (syn.eligibility_ltp_timer > 0) {
-          syn.eligibility_ltp_timer--;
-          if (syn.eligibility_ltp_timer == 0)
-            syn.eligible_for_LTP = false;
-        }
-        if (syn.eligibility_ltd_timer > 0) {
-          syn.eligibility_ltd_timer--;
-          if (syn.eligibility_ltd_timer == 0)
-            syn.eligible_for_LTD = false;
-        }
+        if (!is_fixed) {
+          // Decay timers
+          if (syn.ltp_timer > 0)
+            syn.ltp_timer--;
+          if (syn.ltd_timer > 0)
+            syn.ltd_timer--;
 
-        // Trace creation
-        if (neurons[i].spiked_this_step) {
-          syn.ltp_timer = SPIKE_TRACE_WINDOW;
-          if (syn.ltd_timer > 0) {
-            syn.eligible_for_LTD = true;
-            syn.eligibility_ltd_timer = ELIGIBILITY_TRACE_WINDOW;
+          if (syn.eligibility_ltp_timer > 0) {
+            syn.eligibility_ltp_timer--;
+            if (syn.eligibility_ltp_timer == 0)
+              syn.eligible_for_LTP = false;
           }
-        }
-
-        if (neurons[syn.target_neuron_idx].spiked_this_step) {
-          syn.ltd_timer = SPIKE_TRACE_WINDOW;
-          if (syn.ltp_timer > 0) {
-            syn.eligible_for_LTP = true;
-            syn.eligibility_ltp_timer = ELIGIBILITY_TRACE_WINDOW;
+          if (syn.eligibility_ltd_timer > 0) {
+            syn.eligibility_ltd_timer--;
+            if (syn.eligibility_ltd_timer == 0)
+              syn.eligible_for_LTD = false;
           }
-        }
 
-        // Learning
-        if (reward_active) {
-          if (syn.eligible_for_LTP && syn.confidence < CONFIDENCE_MAX) {
-            syn.confidence++;
-            syn.eligible_for_LTP = false;
-            syn.eligibility_ltp_timer = 0;
+          // Trace creation
+          if (neurons[i].spiked_this_step) {
+            syn.ltp_timer = SPIKE_TRACE_WINDOW;
+            if (syn.ltd_timer > 0) {
+              syn.eligible_for_LTD = true;
+              syn.eligibility_ltd_timer = ELIGIBILITY_TRACE_WINDOW;
+            }
+          }
+
+          if (neurons[syn.target_neuron_idx].spiked_this_step) {
+            syn.ltd_timer = SPIKE_TRACE_WINDOW;
+            if (syn.ltp_timer > 0) {
+              syn.eligible_for_LTP = true;
+              syn.eligibility_ltp_timer = ELIGIBILITY_TRACE_WINDOW;
+            }
+          }
+
+          // Learning
+          if (reward_active) {
+            if (syn.eligible_for_LTP && syn.confidence < CONFIDENCE_MAX) {
+              syn.confidence++;
+              syn.eligible_for_LTP = false;
+              syn.eligibility_ltp_timer = 0;
+              syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+            }
+            if (syn.eligible_for_LTD && syn.confidence > 0) {
+              syn.confidence--;
+              syn.eligible_for_LTD = false;
+              syn.eligibility_ltd_timer = 0;
+              syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+            }
+          }
+
+          // Leak
+          if (syn.confidence_leak_timer > 0)
+            syn.confidence_leak_timer--;
+          if (syn.confidence_leak_timer == 0) {
+            syn.confidence >>= 1;
             syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
           }
-          if (syn.eligible_for_LTD && syn.confidence > 0) {
-            syn.confidence--;
-            syn.eligible_for_LTD = false;
-            syn.eligibility_ltd_timer = 0;
-            syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
-          }
-        }
 
-        // Leak
-        if (syn.confidence_leak_timer > 0)
-          syn.confidence_leak_timer--;
-        if (syn.confidence_leak_timer == 0) {
-          syn.confidence >>= 1;
-          syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+          syn.active = (syn.confidence >= CONFIDENCE_THR);
+        } else {
+          // Fixed synapses are always active
+          syn.active = true;
         }
-
-        syn.active = (syn.confidence >= CONFIDENCE_THR);
       }
     }
   }
