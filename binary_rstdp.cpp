@@ -10,7 +10,7 @@
 const int V_THRESH = 10;
 const int V_REST = 0;
 const int REFRACTORY_PERIOD = 2;
-const int MEMBRANE_DECAY_PERIOD = 20;
+const int MEMBRANE_DECAY_PERIOD = 100;
 
 // Global tick counter for the whole model:
 // every 10th tick all neuron membrane potentials are halved.
@@ -27,9 +27,11 @@ const int CONFIDENCE_LEAK_PERIOD = 1000;
 static bool REWARD = true;
 
 // Simulation
-const int WORLD_SIZE = 20;
+const int WORLD_SIZE = 30;
 const int BRAIN_SIZE = 30; // 4 сенсора + 2 мотора + 24 скрытых
-const int DURATION = 100000;
+const int DURATION = 1000000;
+const int CONSTANT_REWARD_DURATION = 500000;
+const double CONNECTION_DENSITY = 0.6;
 const int CONFIDENCE_INIT_LOW = 1; 
 const int CONFIDENCE_INIT_HIGH = 2;
 
@@ -58,7 +60,8 @@ struct DigitalSynapse {
           eligible_for_LTP(false),
           eligible_for_LTD(false),
           eligibility_ltp_timer(0),
-          eligibility_ltd_timer(0) {}
+          eligibility_ltd_timer(0),
+          confidence_leak_timer(CONFIDENCE_LEAK_PERIOD) {}
 };
 
 struct DigitalNeuron {
@@ -225,6 +228,41 @@ public:
     }
 };
 
+// Полный вывод состояния мозга (нейроны и синапсы)
+void print_brain_state(const SpikingNet& net) {
+    std::cout << "\n=== Brain state after initialization ===\n";
+    std::cout << "Neurons: " << net.neurons.size() << "\n";
+
+    for (const auto& n : net.neurons) {
+        std::cout << "Neuron " << n.id
+                  << " | V=" << n.voltage
+                  << " | refractory=" << n.refractory_timer
+                  << " | spiked=" << n.spiked_this_step
+                  << " | input_buf=" << n.input_buffer
+                  << "\n";
+    }
+
+    std::cout << "\nConnections:\n";
+    for (size_t i = 0; i < net.connections.size(); ++i) {
+        const auto& synapses = net.connections[i];
+        std::cout << " From neuron " << i << " (" << synapses.size() << " synapses)\n";
+        for (const auto& syn : synapses) {
+            std::cout << "   -> " << syn.target_neuron_idx
+                      << " | conf=" << syn.confidence
+                      << " | active=" << syn.active
+                      << " | ltp_t=" << syn.ltp_timer
+                      << " | ltd_t=" << syn.ltd_timer
+                      << " | elig_LTP=" << syn.eligible_for_LTP
+                      << " | elig_LTP_t=" << syn.eligibility_ltp_timer
+                      << " | elig_LTD=" << syn.eligible_for_LTD
+                      << " | elig_LTD_t=" << syn.eligibility_ltd_timer
+                      << " | leak_t=" << syn.confidence_leak_timer
+                      << "\n";
+        }
+    }
+    std::cout << "=======================================\n\n";
+}
+
 // --- Tests ---
 
 // 1. LIF neuron dynamics
@@ -357,6 +395,16 @@ void test_STDP_Mechanics_001() {
 
 enum TargetType { NONE, FOOD, DANGER };
 
+// ASCII-friendly log for world target appearance
+void log_target_event(TargetType type, int target_pos, int agent_pos, int timer) {
+    std::cout << "[WORLD] New target: "
+              << (type == FOOD ? "FOOD" : "DANGER")
+              << " at position " << target_pos
+              << " (agent at " << agent_pos << ")"
+              << ", lifetime " << timer << " steps"
+              << std::endl;
+}
+
 struct World {
     int size;
     int agent_pos;
@@ -375,19 +423,30 @@ struct World {
               food_eaten(0), danger_hit(0), steps_survived(0), rng(42) {}
 
     void spawn_target() {
-        if (target_type != NONE) return;
-        
         std::uniform_int_distribution<int> pos_dist(0, size - 1);
-        std::uniform_int_distribution<int> type_dist(0, 1);
-        std::uniform_int_distribution<int> time_dist(50, 200);
+        std::uniform_int_distribution<int> type_dist(0, 2); // 0: FOOD, 1: DANGER, 2: NONE
+        std::uniform_int_distribution<int> time_dist(2000, 3000);
 
-        // Спавним не там, где агент
-        do {
-            target_pos = pos_dist(rng);
-        } while (target_pos == agent_pos);
-
-        target_type = (type_dist(rng) == 0) ? FOOD : DANGER;
+        int choice = type_dist(rng);
         target_timer = time_dist(rng);
+
+        if (choice == 2) {
+            target_type = NONE;
+            std::cout << "[WORLD] Period: NONE (Pause) for " << target_timer << " steps" << std::endl;
+        } else {
+            target_type = (choice == 0) ? FOOD : DANGER;
+            // Спавним не там, где агент
+            do {
+                target_pos = pos_dist(rng);
+            } while (target_pos == agent_pos);
+
+            std::cout << "[WORLD] New target: "
+                      << (target_type == FOOD ? "FOOD" : "DANGER")
+                      << " at position " << target_pos
+                      << " (agent at " << agent_pos << ")"
+                      << ", lifetime " << target_timer << " steps"
+                      << std::endl;
+        }
     }
 
     // Возвращает вектор сенсоров: [FoodLeft, FoodRight, DangerLeft, DangerRight]
@@ -410,44 +469,54 @@ struct World {
 
     // Возвращает true, если получили награду
     bool update(bool move_left, bool move_right) {
-        if (target_type == NONE) {
+        if (target_timer <= 0) {
             spawn_target();
-            return false;
         }
 
-        int prev_dist = std::abs(agent_pos - target_pos);
+        int prev_dist = 0;
+        int curr_dist = 0;
+        
+        if (target_type != NONE) {
+            prev_dist = std::abs(agent_pos - target_pos);
+        }
         
         if (move_left && agent_pos > 0) agent_pos--;
         if (move_right && agent_pos < size - 1) agent_pos++;
 
-        int curr_dist = std::abs(agent_pos - target_pos);
         bool reward = false;
 
-        // Логика награды (Градиент)
-        if (target_type == FOOD) {
-            if (curr_dist < prev_dist) reward = true; // Приближаемся к еде
-        } else if (target_type == DANGER) {
-            if (curr_dist > prev_dist) reward = true; // Убегаем от опасности
-        }
-
-        // Проверка столкновения
-        if (curr_dist == 0) {
-            if (target_type == FOOD) {
-                food_eaten++;
-                reward = true; // Бонус за съедение
-                // std::cout << "YUMMY! ";
-            } else {
-                danger_hit++;
-                reward = false; // Нет награды за смерть
-                // std::cout << "OUCH! ";
-            }
-            target_type = NONE; // Цель исчезла
-        }
-
-        // Таймер исчезновения цели
         if (target_type != NONE) {
+            curr_dist = std::abs(agent_pos - target_pos);
+
+            // Логика награды (Градиент)
+            if (target_type == FOOD) {
+                if (curr_dist < prev_dist) reward = true; // Приближаемся к еде
+            } else if (target_type == DANGER) {
+                if (curr_dist > prev_dist) reward = true; // Убегаем от опасности
+            }
+
+            // Проверка столкновения
+            if (curr_dist == 0) {
+                if (target_type == FOOD) {
+                    food_eaten++;
+                    reward = true; // Бонус за съедение
+                    std::cout << "YUMMY! ";
+                } else {
+                    danger_hit++;
+                    reward = false; // Нет награды за смерть
+                    std::cout << "OUCH! ";
+                }
+                target_type = NONE; // Цель исчезла
+                target_timer = 0;   // Срочно спавним новое состояние
+            }
+        }
+
+        // Таймер исчезновения цели или паузы
+        if (target_timer > 0) {
             target_timer--;
-            if (target_timer <= 0) target_type = NONE;
+            if (target_timer <= 0) {
+                target_type = NONE;
+            }
         }
 
         return reward;
@@ -462,9 +531,12 @@ int main() {
     // 4-5: Моторы (Output) [4: Left, 5: Right]
     // 6-29: Hidden (Куча)
     
-    // Подключаем случайно, плотность 30%
+    // Подключаем случайно
     std::mt19937 rng(999);
-    brain.connect_randomly(0.3, rng);
+    brain.connect_randomly(CONNECTION_DENSITY, rng);
+
+    // ??????? ?????? ????????? ?????? ????? (???????????? ???????)
+    print_brain_state(brain);
 
     World world;
 
@@ -472,6 +544,8 @@ int main() {
     
     // Для статистики
     int total_reward = 0;
+    int total_spikes = 0;
+    int motor_spikes = 0;
     int block_size = 1000;
 
     for (int t = 0; t < DURATION; ++t) {
@@ -485,26 +559,55 @@ int main() {
 
         // 2. Шаг сети
         brain.step(net_input);
+        for (const auto& n : brain.neurons) {
+            if (n.spiked_this_step) {
+                total_spikes++;
+                if (n.id == 4 || n.id == 5) motor_spikes++;
+            }
+        }
 
         // 3. Чтение моторов (Нейроны 4 и 5)
-        bool m_left = brain.neurons[4].spiked_this_step;
-        bool m_right = brain.neurons[5].spiked_this_step;
+        bool raw_left = brain.neurons[4].spiked_this_step;
+        bool raw_right = brain.neurons[5].spiked_this_step;
+
+        bool m_left = raw_left;
+        bool m_right = raw_right;
 
         // Если оба спайкнули - стоим (конфликт)
-        if (m_left && m_right) { m_left = false; m_right = false; }
+        if (m_left && m_right) 
+        { 
+            m_left = false; 
+            //m_right = false; 
+        }
 
-        // 4. Обновление мира и расчет награды
+        // if (m_left || m_right) {
+        //     std::cout << "[MOVE] Tick " << t 
+        //               << " | Direction: " << (m_left ? "LEFT" : "RIGHT")
+        //               << " | Raw Spikes: [M4:" << (raw_left ? "1" : "0") 
+        //               << ", M5:" << (raw_right ? "1" : "0") << "]"
+        //               << std::endl;
+        // }
+
+        // 4. обновляем мир и считаем награду
         bool got_reward = world.update(m_left, m_right);
-        
-        // 5. Установка глобального флага для R-STDP на следующий шаг
-        REWARD = got_reward;
+
+        // 5. глобальный флаг REWARD для R-STDP
+        // первые CONSTANT_REWARD_DURATION шагов всегда true, потом как раньше
+        if (t < CONSTANT_REWARD_DURATION) {
+            REWARD = true;
+        } else {
+            REWARD = got_reward;
+        }
         if (got_reward) total_reward++;
+
 
         // Логгирование каждые N шагов
         if (t % block_size == 0 && t > 0) {
             std::cout << "Tick " << t 
                       << " | Food: " << world.food_eaten 
                       << " Danger: " << world.danger_hit
+                      << " | Spikes: " << total_spikes
+                      << " (M: " << motor_spikes << ")"
                       << " | Avg Reward: " << (double)total_reward / block_size 
                       << std::endl;
             
@@ -512,9 +615,12 @@ int main() {
             world.food_eaten = 0;
             world.danger_hit = 0;
             total_reward = 0;
+            total_spikes = 0;
+            motor_spikes = 0;
         }
     }
 
     std::cout << "Done." << std::endl;
     return 0;
 }
+
