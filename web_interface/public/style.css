@@ -177,6 +177,37 @@ h1 {
     border-color: var(--motor-color);
 }
 
+.neuron.motor-left::before {
+    content: '←';
+    position: absolute;
+    top: -80px;
+    left: 50%;
+    transform: translateX(-50%) scale(1, 3);
+    font-size: 50px;
+    color: #334155;
+    font-weight: bold;
+    transition: color 0.1s;
+    pointer-events: none;
+}
+
+.neuron.motor-right::before {
+    content: '→';
+    position: absolute;
+    top: -80px;
+    left: 50%;
+    transform: translateX(-50%) scale(1, 3);
+    font-size: 50px;
+    color: #334155;
+    font-weight: bold;
+    transition: color 0.1s;
+    pointer-events: none;
+}
+
+.neuron.motor.spiked::before {
+    color: #22c55e;
+    text-shadow: 0 0 10px rgba(34, 197, 94, 0.8);
+}
+
 /* Dynamic Filling (Membrane Potential) */
 /* We will use a pseudo-element or radial gradient in JS, but simple opacity change is easier for pure CSS class */
 .neuron.spiked {

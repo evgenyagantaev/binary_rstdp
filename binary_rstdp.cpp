@@ -10,26 +10,26 @@
 #include <vector>
 
 // --- Neuron parameters ---
-const int V_THRESH = 10;
+const int V_THRESH = 7;
 const int V_REST = 0;
 const int REFRACTORY_PERIOD = 1;
-const int MEMBRANE_DECAY_PERIOD = 1000;
+const int MEMBRANE_DECAY_PERIOD = 10000;
 
 // --- Synapse / R-STDP parameters ---
 const int CONFIDENCE_MAX = 3;
 const int CONFIDENCE_THR = 3;
-const int SPIKE_TRACE_WINDOW = 10;
-const int ELIGIBILITY_TRACE_WINDOW = 100;
-const int CONFIDENCE_LEAK_PERIOD = 10000;
+const int SPIKE_TRACE_WINDOW = 100;
+const int ELIGIBILITY_TRACE_WINDOW = 1000;
+const int CONFIDENCE_LEAK_PERIOD = 50000;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
 const int BRAIN_SIZE = 36; // 4 sensors + 2 motors + 30 hidden
 const int CONSTANT_REWARD_DURATION = 5000;
-const double CONNECTION_DENSITY = 0.6;
+const double CONNECTION_DENSITY = 0.3;
 const int CONFIDENCE_INIT_LOW = 0;
 const int CONFIDENCE_INIT_HIGH = 3;
-const int RANDOM_ACTIVITY_COUNT = 2;
+const int RANDOM_ACTIVITY_COUNT = 1;
 
 // --- Data structures ---
 
@@ -46,13 +46,14 @@ struct DigitalSynapse {
   int eligibility_ltp_timer;
   int eligibility_ltd_timer;
   int confidence_leak_timer;
+  bool highlighted;
 
   DigitalSynapse(int target, int init_conf = 1)
       : target_neuron_idx(target), confidence(init_conf),
         active(init_conf >= CONFIDENCE_THR), ltp_timer(0), ltd_timer(0),
         eligible_for_LTP(false), eligible_for_LTD(false),
         eligibility_ltp_timer(0), eligibility_ltd_timer(0),
-        confidence_leak_timer(CONFIDENCE_LEAK_PERIOD) {}
+        confidence_leak_timer(CONFIDENCE_LEAK_PERIOD), highlighted(false) {}
 };
 
 struct DigitalNeuron {
@@ -62,9 +63,22 @@ struct DigitalNeuron {
   bool spiked_this_step;
   int input_buffer;
 
+  // History for causal tracing
+  struct Contribution {
+    int from_row;
+    int syn_idx;
+  };
+  std::vector<Contribution> next_contributors;
+  std::vector<std::vector<Contribution>> contrib_history;
+  std::vector<bool> spike_history;
+  static const int MAX_HIST = 32;
+
   DigitalNeuron(int _id)
       : id(_id), voltage(0), refractory_timer(0), spiked_this_step(false),
-        input_buffer(0) {}
+        input_buffer(0) {
+    contrib_history.resize(MAX_HIST);
+    spike_history.resize(MAX_HIST, false);
+  }
 };
 
 class SpikingNet {
@@ -98,6 +112,10 @@ public:
         if (j < 4)
           continue;
 
+        // Exclude direct sensory to motor connections
+        if (i < 4 && (j >= 4 && j < 6))
+          continue;
+
         if (dist(rng) < density) {
           int init_conf = conf_dist(rng);
           // Fixed synapses: sensory outgoing (0-3) or motor incoming (4-5)
@@ -115,6 +133,22 @@ public:
   void step(const std::vector<int> &sensory_input, bool reward_active) {
     ++global_tick;
     const bool apply_decay = (global_tick % MEMBRANE_DECAY_PERIOD == 0);
+
+    // 0. Update history and reset highlights
+    for (auto &row : connections) {
+      for (auto &syn : row)
+        syn.highlighted = false;
+    }
+    for (auto &n : neurons) {
+      // Shift history
+      for (int h = n.MAX_HIST - 1; h > 0; --h) {
+        n.contrib_history[h] = n.contrib_history[h - 1];
+        n.spike_history[h] = n.spike_history[h - 1];
+      }
+      n.contrib_history[0] = n.next_contributors;
+      n.spike_history[0] = n.spiked_this_step;
+      n.next_contributors.clear();
+    }
 
     // 1. Update neurons
     for (auto &n : neurons) {
@@ -147,6 +181,8 @@ public:
       for (auto &syn : synapses) {
         if (neurons[i].spiked_this_step && syn.active) {
           neurons[syn.target_neuron_idx].input_buffer += 1;
+          neurons[syn.target_neuron_idx].next_contributors.push_back(
+              {i, (int)(&syn - &synapses[0])});
         }
 
         bool is_fixed = (i < 4) || (syn.target_neuron_idx >= 4 &&
@@ -210,12 +246,29 @@ public:
             syn.confidence >>= 1;
             syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
           }
-
-          syn.active = (syn.confidence >= CONFIDENCE_THR);
-        } else {
-          // Fixed synapses are always active
-          syn.active = true;
         }
+      }
+    }
+
+    // 3. Causal Tracing from Motor Neurons
+    for (int m = 4; m <= 5; ++m) {
+      if (neurons[m].spiked_this_step) {
+        trace_causal_chain(m, 0);
+      }
+    }
+  }
+
+  void trace_causal_chain(int n_idx, int depth) {
+    if (depth >= DigitalNeuron::MAX_HIST)
+      return;
+    for (const auto &c : neurons[n_idx].contrib_history[depth]) {
+      DigitalSynapse &syn = connections[c.from_row][c.syn_idx];
+      syn.highlighted = true;
+      // If the source of this spike also spiked at the corresponding time,
+      // trace further. The contributors in history[depth] correspond to
+      // spikes in spike_history[depth].
+      if (neurons[c.from_row].spike_history[depth]) {
+        trace_causal_chain(c.from_row, depth + 1);
       }
     }
   }
@@ -380,7 +433,8 @@ void print_json_state(const SpikingNet &net, const World &world, int tick) {
         std::cout << ",";
       std::cout << "{\"s\":" << i << ",\"t\":" << syn.target_neuron_idx
                 << ",\"c\":" << syn.confidence
-                << ",\"a\":" << (syn.active ? "true" : "false") << "}";
+                << ",\"a\":" << (syn.active ? "true" : "false")
+                << ",\"b\":" << (syn.highlighted ? "1" : "0") << "}";
       first = false;
     }
   }

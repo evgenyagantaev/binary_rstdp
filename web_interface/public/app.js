@@ -40,7 +40,8 @@ function initGrid() {
 
         // Assign types
         if (i < 4) el.classList.add('sensor');
-        else if (i === 4 || i === 5) el.classList.add('motor');
+        else if (i === 4) el.classList.add('motor', 'motor-left');
+        else if (i === 5) el.classList.add('motor', 'motor-right');
 
         neuronGrid.appendChild(el);
         neurons.push({ id: i, el, v: 0 });
@@ -110,8 +111,20 @@ function drawSynapses() {
         ctx.moveTo(source.x, source.y);
         ctx.lineTo(target.x, target.y);
 
-        if (conn.a) {
-            // Active: Red, Opaque
+        if (conn.b) {
+            // Causal Chain: Bright Blue, Thick
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 18;
+        } else if (conn.s < 4) {
+            // Sensory Outgoing: Yellow
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 1.5;
+        } else if (conn.t >= 4 && conn.t < 6) {
+            // Motor Incoming: Green
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = 1.5;
+        } else if (conn.a) {
+            // Other Active: Red, Opaque
             ctx.strokeStyle = 'rgba(239, 68, 68, 1.0)';
             ctx.lineWidth = 1.5;
         } else {
@@ -238,12 +251,18 @@ document.getElementById('btnReset').addEventListener('click', () => {
     socket.send('reset');
 });
 const speedRange = document.getElementById('speedRange');
+const speedInput = document.getElementById('speedInput');
 const speedVal = document.getElementById('speedVal');
-speedRange.addEventListener('input', (e) => {
-    const val = e.target.value;
+
+function updateSpeed(val) {
+    speedRange.value = val;
+    speedInput.value = val;
     speedVal.textContent = val;
     socket.send('speed ' + val);
-});
+}
+
+speedRange.addEventListener('input', (e) => updateSpeed(e.target.value));
+speedInput.addEventListener('input', (e) => updateSpeed(e.target.value));
 
 // Handle window resize
 window.addEventListener('resize', updatePositions);
