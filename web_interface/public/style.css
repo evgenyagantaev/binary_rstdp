@@ -1,0 +1,238 @@
+:root {
+    --bg-color: #0f172a;
+    --text-color: #f8fafc;
+    --neuron-off: #334155;
+    --neuron-on: #fbbf24;
+    /* Amber-400 */
+    --sensor-color: #60a5fa;
+    /* Blue-400 */
+    --motor-color: #f87171;
+    /* Red-400 */
+    --grid-size: 6;
+    --gap: 60px;
+    /* Space between neurons */
+    --neuron-size: 40px;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: 'Inter', sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 20px;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #334155;
+    padding-bottom: 10px;
+}
+
+.header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+button {
+    background-color: #3b82f6;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+button:hover {
+    background-color: #2563eb;
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+.slider-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.9rem;
+    margin-left: 10px;
+}
+
+#speedRange {
+    width: 300px;
+    cursor: pointer;
+}
+
+h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.status {
+    font-size: 0.8rem;
+    padding: 4px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.status.connected {
+    background-color: #22c55e;
+    color: #fff;
+}
+
+.status.disconnected {
+    background-color: #ef4444;
+    color: #fff;
+}
+
+.stats {
+    display: flex;
+    gap: 20px;
+    font-family: monospace;
+    font-size: 1.1rem;
+}
+
+/* Visualization Container */
+.visualization-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Synapse Canvas Layer */
+#synapseCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    /* Behind neurons */
+}
+
+/* Neuron Grid Layer */
+.neuron-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--grid-size), 1fr);
+    grid-template-rows: repeat(var(--grid-size), 1fr);
+    gap: var(--gap);
+    z-index: 2;
+    position: relative;
+    padding: 10px;
+}
+
+.neuron {
+    width: var(--neuron-size);
+    height: var(--neuron-size);
+    border-radius: 50%;
+    background-color: var(--bg-color);
+    /* Matches app background */
+    border: 2px solid #475569;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    transition: background-color 0.1s, transform 0.1s;
+    position: relative;
+    z-index: 5;
+    /* Above canvas */
+}
+
+/* Neuron Types */
+.neuron.sensor {
+    border-color: var(--sensor-color);
+}
+
+.neuron.motor {
+    border-color: var(--motor-color);
+}
+
+/* Dynamic Filling (Membrane Potential) */
+/* We will use a pseudo-element or radial gradient in JS, but simple opacity change is easier for pure CSS class */
+.neuron.spiked {
+    background-color: #ffffff;
+    box-shadow: 0 0 15px 5px rgba(255, 255, 255, 0.8);
+    transform: scale(1.1);
+    border-color: #fff;
+    color: #000;
+}
+
+/* World View */
+.world-view {
+    margin-top: 40px;
+    width: 600px;
+    text-align: center;
+}
+
+.world-track {
+    margin-top: 10px;
+    height: 40px;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 20px;
+    position: relative;
+    overflow: hidden;
+}
+
+.entity {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    position: absolute;
+    top: 10px;
+    /* Vertically centered */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 10px;
+    transition: left 0.05s linear;
+}
+
+.entity.agent {
+    background-color: #3b82f6;
+    /* Blue */
+    color: white;
+}
+
+.entity.target {
+    background-color: #eab308;
+    /* Yellow/Gold */
+    color: black;
+}
+
+.entity.target.danger {
+    background-color: #ef4444;
+    /* Red */
+    color: white;
+}

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SNN Real-time Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div id="app">
+        <header>
+            <div class="header-left">
+                <h1>SNN Visualizer <span id="status" class="status disconnected">Disconnected</span></h1>
+                <div class="controls">
+                    <button id="btnStart">Start</button>
+                    <button id="btnStop">Stop</button>
+                    <button id="btnPause">Pause</button>
+                    <button id="btnReset">Reset</button>
+                    <div class="slider-container">
+                        <label for="speedRange">Delay: <span id="speedVal">500</span>ms</label>
+                        <input type="range" id="speedRange" min="0" max="1000" value="500">
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats">
+                <div>Tick: <span id="tick">0</span></div>
+                <div>Food: <span id="food">0</span></div>
+                <div>Danger: <span id="danger">0</span></div>
+                <div>Type: <span id="targetType">-</span></div>
+            </div>
+        </header>
+
+        <main class="visualization-container">
+            <!-- Grid for Neurons -->
+            <div id="neuronGrid" class="neuron-grid">
+                <!-- Neurons will be injected here by JS -->
+
+                <!-- Canvas for connections (Synapses) -->
+                <canvas id="synapseCanvas"></canvas>
+            </div>
+
+            <!-- World View (Agent & Target) -->
+            <div class="world-view">
+                <h2>World Simulation</h2>
+                <div id="worldTrack" class="world-track">
+                    <div id="agent" class="entity agent">A</div>
+                    <div id="target" class="entity target">T</div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+
+</html>
