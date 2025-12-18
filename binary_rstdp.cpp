@@ -489,10 +489,12 @@ int main() {
         net_input[i] = sensors[i];
 
       // 1.5. Random wandering activity
-      std::uniform_int_distribution<int> rand_neuron_dist(6, BRAIN_SIZE - 1);
-      for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
-        int rand_idx = rand_neuron_dist(rng);
-        net_input[rand_idx]++;
+      if (t < CONSTANT_REWARD_DURATION) {
+        std::uniform_int_distribution<int> rand_neuron_dist(6, BRAIN_SIZE - 1);
+        for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
+          int rand_idx = rand_neuron_dist(rng);
+          net_input[rand_idx]++;
+        }
       }
 
       // 2. Brain Step
