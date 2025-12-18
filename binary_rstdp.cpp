@@ -292,20 +292,18 @@ struct World {
         target_timer(0), food_eaten(0), danger_hit(0), rng(42) {}
 
   void spawn_target() {
-    std::uniform_int_distribution<int> pos_dist(0, size - 1);
     std::uniform_int_distribution<int> type_dist(0, 2);
     std::uniform_int_distribution<int> time_dist(2000, 3000);
 
     int choice = type_dist(rng);
     target_timer = time_dist(rng);
 
-    if (choice == 2) {
+    if (choice == 2 || agent_pos <= 0) {
       target_type = NONE;
     } else {
       target_type = (choice == 0) ? FOOD : DANGER;
-      do {
-        target_pos = pos_dist(rng);
-      } while (target_pos == agent_pos);
+      std::uniform_int_distribution<int> pos_dist(0, agent_pos - 1);
+      target_pos = pos_dist(rng);
     }
   }
 
@@ -330,8 +328,16 @@ struct World {
       spawn_target();
 
     int prev_dist = 0;
-    if (target_type != NONE)
+    if (target_type != NONE) {
       prev_dist = std::abs(agent_pos - target_pos);
+    } else {
+      // Force move to middle when no target exists
+      int mid = size / 2;
+      if (agent_pos < mid)
+        agent_pos++;
+      else if (agent_pos > mid)
+        agent_pos--;
+    }
 
     if (move_left && agent_pos > 0)
       agent_pos--;
