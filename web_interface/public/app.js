@@ -39,7 +39,8 @@ function initGrid() {
 
 
         // Assign types
-        if (i < 4) el.classList.add('sensor');
+        if (i === 1 || i === 3) el.classList.add('disabled');
+        else if (i < 4) el.classList.add('sensor');
         else if (i === 4) el.classList.add('motor', 'motor-left');
         else if (i === 5) el.classList.add('motor', 'motor-right');
 

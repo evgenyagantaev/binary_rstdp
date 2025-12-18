@@ -177,6 +177,12 @@ h1 {
     border-color: var(--motor-color);
 }
 
+.neuron.disabled {
+    opacity: 0.2;
+    filter: grayscale(1);
+    pointer-events: none;
+}
+
 .neuron.motor-left::before {
     content: '←';
     position: absolute;

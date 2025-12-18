@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -26,8 +28,8 @@ const int CONFIDENCE_LEAK_PERIOD = 50000;
 const int WORLD_SIZE = 30;
 const int BRAIN_SIZE = 36; // 4 sensors + 2 motors + 30 hidden
 const int CONSTANT_REWARD_DURATION = 5000;
-const double CONNECTION_DENSITY = 0.3;
-const int CONFIDENCE_INIT_LOW = 0;
+const double CONNECTION_DENSITY = 0.5;
+const int CONFIDENCE_INIT_LOW = 1;
 const int CONFIDENCE_INIT_HIGH = 3;
 const int RANDOM_ACTIVITY_COUNT = 1;
 
@@ -99,29 +101,39 @@ public:
     std::uniform_int_distribution<int> conf_dist(CONFIDENCE_INIT_LOW,
                                                  CONFIDENCE_INIT_HIGH);
 
-    for (int i = 0; i < neurons.size(); ++i) {
-      // Motor neurons (4,5) cannot have outgoing synapses
-      if (i >= 4 && i < 6)
-        continue;
+    std::vector<int> sensor_source(neurons.size(), -1);
+    std::vector<int> motor_target(neurons.size(), -1);
 
-      for (int j = 0; j < neurons.size(); ++j) {
+    // 1. Deterministic Connections (Sensors and Motors)
+    // Sensor 0 -> 6, 7, 8
+    for (int target : {6, 7, 8})
+      connections[0].emplace_back(target, CONFIDENCE_MAX);
+    // Sensor 2 -> 9, 10, 11
+    for (int target : {9, 10, 11})
+      connections[2].emplace_back(target, CONFIDENCE_MAX);
+    // 30, 31, 32 -> Motor 4
+    for (int source : {30, 31, 32})
+      connections[source].emplace_back(4, CONFIDENCE_MAX);
+    // 33, 34, 35 -> Motor 5
+    for (int source : {33, 34, 35})
+      connections[source].emplace_back(5, CONFIDENCE_MAX);
+
+    // 2. Random Hidden-to-Hidden Connections (Neurons 6 to 35)
+    std::vector<int> hidden_indices;
+    for (int i = 6; i < (int)neurons.size(); ++i)
+      hidden_indices.push_back(i);
+
+    std::vector<int> src_indices = hidden_indices;
+    std::vector<int> tgt_indices = hidden_indices;
+    std::shuffle(src_indices.begin(), src_indices.end(), rng);
+    std::shuffle(tgt_indices.begin(), tgt_indices.end(), rng);
+
+    for (int i : src_indices) {
+      for (int j : tgt_indices) {
         if (i == j)
           continue;
-
-        // Sensory neurons (0,1,2,3) cannot have incoming synapses
-        if (j < 4)
-          continue;
-
-        // Exclude direct sensory to motor connections
-        if (i < 4 && (j >= 4 && j < 6))
-          continue;
-
         if (dist(rng) < density) {
           int init_conf = conf_dist(rng);
-          // Fixed synapses: sensory outgoing (0-3) or motor incoming (4-5)
-          if (i < 4 || (j >= 4 && j < 6)) {
-            init_conf = CONFIDENCE_MAX;
-          }
           connections[i].emplace_back(j, init_conf);
         }
       }
@@ -130,7 +142,9 @@ public:
 
   // sensory_input: number of input spikes per neuron at this timestep
   // reward_active: true if global reward signal is present
-  void step(const std::vector<int> &sensory_input, bool reward_active) {
+  // penalty_active: true if global penalty signal is present
+  void step(const std::vector<int> &sensory_input, bool reward_active,
+            bool penalty_active) {
     ++global_tick;
     const bool apply_decay = (global_tick % MEMBRANE_DECAY_PERIOD == 0);
 
@@ -237,6 +251,18 @@ public:
               syn.eligibility_ltd_timer = 0;
               syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
             }
+          } else if (penalty_active) {
+            if (syn.eligible_for_LTP && syn.confidence > 0) {
+              syn.confidence--;
+              syn.eligible_for_LTP = false;
+              syn.eligibility_ltp_timer = 0;
+              syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+            }
+            // LTD + PENALTY is ignored per user request
+            if (syn.eligible_for_LTD) {
+              syn.eligible_for_LTD = false;
+              syn.eligibility_ltd_timer = 0;
+            }
           }
 
           // Leak
@@ -276,6 +302,11 @@ public:
 
 // --- World Simulation ---
 enum TargetType { NONE, FOOD, DANGER };
+
+struct WorldUpdateResult {
+  bool reward;
+  bool penalty;
+};
 
 struct World {
   int size;
@@ -323,11 +354,11 @@ struct World {
     return sensors;
   }
 
-  bool update(bool move_left, bool move_right) {
+  WorldUpdateResult update(bool move_left, bool move_right) {
     if (target_timer <= 0)
       spawn_target();
 
-    int prev_dist = 0;
+    int prev_dist = -1;
     if (target_type != NONE) {
       prev_dist = std::abs(agent_pos - target_pos);
     } else {
@@ -344,24 +375,31 @@ struct World {
     if (move_right && agent_pos < size - 1)
       agent_pos++;
 
-    bool reward = false;
+    WorldUpdateResult res = {false, false};
     if (target_type != NONE) {
       int curr_dist = std::abs(agent_pos - target_pos);
+
       if (target_type == FOOD) {
         if (curr_dist < prev_dist)
-          reward = true;
+          res.reward = true;
+        else if (curr_dist > prev_dist)
+          res.penalty = true;
       } else if (target_type == DANGER) {
         if (curr_dist > prev_dist)
-          reward = true;
+          res.reward = true;
+        else if (curr_dist < prev_dist)
+          res.penalty = true;
       }
 
       if (curr_dist == 0) {
         if (target_type == FOOD) {
           food_eaten++;
-          reward = true;
+          res.reward = true;
+          res.penalty = false; // Reward takes precedence
         } else {
           danger_hit++;
-          reward = false;
+          res.penalty = true;
+          res.reward = false;
         }
         target_type = NONE;
         target_timer = 0;
@@ -374,7 +412,7 @@ struct World {
         target_type = NONE;
     }
 
-    return reward;
+    return res;
   }
 };
 
@@ -457,15 +495,17 @@ int main() {
 
     // --- Initialization ---
     SpikingNet brain(BRAIN_SIZE);
-    std::mt19937 rng(999);
+    std::mt19937 rng(static_cast<unsigned int>(
+        std::chrono::system_clock::now().time_since_epoch().count()));
     brain.connect_randomly(CONNECTION_DENSITY, rng);
     World world;
 
     // Reset flag cleared
     g_reset = false;
 
-    // Reward logic state
-    bool current_reward = true; // Initially true
+    // Reward/Penalty logic state
+    bool current_reward = true; // Initially true during constant duration
+    bool current_penalty = false;
 
     // --- Simulation Loop ---
     for (int t = 0; g_running && !g_reset; ++t) {
@@ -494,8 +534,8 @@ int main() {
       for (int i = 0; i < 4; ++i)
         net_input[i] = sensors[i];
 
-      // 1.5. Random wandering activity
-      if (t < CONSTANT_REWARD_DURATION) {
+      // 1.5. Random wandering activity (every 10 ticks)
+      if (t % 10 == 0) {
         std::uniform_int_distribution<int> rand_neuron_dist(6, BRAIN_SIZE - 1);
         for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
           int rand_idx = rand_neuron_dist(rng);
@@ -504,10 +544,9 @@ int main() {
       }
 
       // 2. Brain Step
-      // Note: In original code, step used global REWARD which was updated at
-      // END of loop. So step used reward from PREVIOUS tick.
       bool force_reward = (t < CONSTANT_REWARD_DURATION);
-      brain.step(net_input, force_reward || current_reward);
+      brain.step(net_input, force_reward || current_reward,
+                 (!force_reward) && current_penalty);
 
       // 3. Motors
       bool m_left = brain.neurons[4].spiked_this_step;
@@ -516,10 +555,11 @@ int main() {
         m_left = false;
 
       // 4. World Update
-      bool got_reward = world.update(m_left, m_right);
+      auto res = world.update(m_left, m_right);
 
-      // 5. Update Reward for NEXT step
-      current_reward = got_reward;
+      // 5. Update Reward/Penalty for NEXT step
+      current_reward = res.reward;
+      current_penalty = res.penalty;
     }
 
     if (g_reset) {
