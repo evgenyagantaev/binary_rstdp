@@ -29,7 +29,7 @@ const int CONSTANT_REWARD_DURATION = 5000;
 const double CONNECTION_DENSITY = 0.6;
 const int CONFIDENCE_INIT_LOW = 0;
 const int CONFIDENCE_INIT_HIGH = 3;
-const int RANDOM_ACTIVITY_COUNT = 3;
+const int RANDOM_ACTIVITY_COUNT = 2;
 
 // --- Data structures ---
 
@@ -86,9 +86,18 @@ public:
                                                  CONFIDENCE_INIT_HIGH);
 
     for (int i = 0; i < neurons.size(); ++i) {
+      // Motor neurons (4,5) cannot have outgoing synapses
+      if (i >= 4 && i < 6)
+        continue;
+
       for (int j = 0; j < neurons.size(); ++j) {
         if (i == j)
           continue;
+
+        // Sensory neurons (0,1,2,3) cannot have incoming synapses
+        if (j < 4)
+          continue;
+
         if (dist(rng) < density) {
           connections[i].emplace_back(j, conf_dist(rng));
         }
