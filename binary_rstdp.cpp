@@ -178,7 +178,8 @@ public:
       } else {
         n.voltage += n.input_buffer;
         if (n.id < static_cast<int>(sensory_input.size())) {
-          n.voltage += sensory_input[n.id];
+          if (sensory_input[n.id] > 0)
+            n.voltage += V_THRESH;
         }
         n.input_buffer = 0;
 
@@ -317,6 +318,27 @@ public:
 
       if (neurons[c.from_row].spike_history[depth]) {
         apply_causal_penalty(c.from_row, depth + 1);
+      }
+    }
+  }
+
+  void apply_causal_reward(int n_idx, int depth) {
+    if (depth >= DigitalNeuron::MAX_HIST)
+      return;
+    for (const auto &c : neurons[n_idx].contrib_history[depth]) {
+      DigitalSynapse &syn = connections[c.from_row][c.syn_idx];
+
+      // Reward only hidden-to-hidden (not yellow/sensor, not green/motor)
+      bool is_fixed = (c.from_row < 4) ||
+                      (syn.target_neuron_idx >= 4 && syn.target_neuron_idx < 6);
+      if (!is_fixed && syn.confidence < CONFIDENCE_MAX) {
+        syn.confidence++;
+        syn.active = (syn.confidence >= CONFIDENCE_THR);
+        syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+      }
+
+      if (neurons[c.from_row].spike_history[depth]) {
+        apply_causal_reward(c.from_row, depth + 1);
       }
     }
   }
@@ -578,6 +600,13 @@ int main() {
 
       // 4. World Update
       auto res = world.update(m_left, m_right);
+
+      if (res.reward) {
+        if (m_left)
+          brain.apply_causal_reward(4, 0);
+        if (m_right)
+          brain.apply_causal_reward(5, 0);
+      }
 
       if (res.penalty) {
         if (m_left)
