@@ -15,12 +15,12 @@
 const int V_THRESH = 7;
 const int V_REST = 0;
 const int REFRACTORY_PERIOD = 1;
-const int MEMBRANE_DECAY_PERIOD = 10000;
+const int MEMBRANE_DECAY_PERIOD = 500;
 
 // --- Synapse / R-STDP parameters ---
-const int CONFIDENCE_MAX = 3;
-const int CONFIDENCE_THR = 3;
-const int SPIKE_TRACE_WINDOW = 100;
+const int CONFIDENCE_MAX = 7;
+const int CONFIDENCE_THR = 5;
+const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 1000;
 const int CONFIDENCE_LEAK_PERIOD = 50000;
 
@@ -30,8 +30,9 @@ const int BRAIN_SIZE = 36; // 4 sensors + 2 motors + 30 hidden
 const int CONSTANT_REWARD_DURATION = 5000;
 const double CONNECTION_DENSITY = 0.5;
 const int CONFIDENCE_INIT_LOW = 1;
-const int CONFIDENCE_INIT_HIGH = 3;
+const int CONFIDENCE_INIT_HIGH = 7;
 const int RANDOM_ACTIVITY_COUNT = 1;
+const int RANDOM_ACTIVITY_PERIOD = 5;
 
 // --- Data structures ---
 
@@ -167,8 +168,8 @@ public:
     // 1. Update neurons
     for (auto &n : neurons) {
       n.spiked_this_step = false;
-      if (apply_decay)
-        n.voltage >>= 1;
+      if (apply_decay && n.voltage > V_REST)
+        n.voltage--;
 
       if (n.refractory_timer > 0) {
         n.refractory_timer--;
@@ -298,6 +299,27 @@ public:
       }
     }
   }
+
+  void apply_causal_penalty(int n_idx, int depth) {
+    if (depth >= DigitalNeuron::MAX_HIST)
+      return;
+    for (const auto &c : neurons[n_idx].contrib_history[depth]) {
+      DigitalSynapse &syn = connections[c.from_row][c.syn_idx];
+
+      // Penalize only hidden-to-hidden (not yellow/sensor, not green/motor)
+      bool is_fixed = (c.from_row < 4) ||
+                      (syn.target_neuron_idx >= 4 && syn.target_neuron_idx < 6);
+      if (!is_fixed && syn.confidence > 0) {
+        syn.confidence--;
+        syn.active = (syn.confidence >= CONFIDENCE_THR);
+        syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+      }
+
+      if (neurons[c.from_row].spike_history[depth]) {
+        apply_causal_penalty(c.from_row, depth + 1);
+      }
+    }
+  }
 };
 
 // --- World Simulation ---
@@ -324,7 +346,7 @@ struct World {
 
   void spawn_target() {
     std::uniform_int_distribution<int> type_dist(0, 2);
-    std::uniform_int_distribution<int> time_dist(2000, 3000);
+    std::uniform_int_distribution<int> time_dist(3000, 5000);
 
     int choice = type_dist(rng);
     target_timer = time_dist(rng);
@@ -534,8 +556,8 @@ int main() {
       for (int i = 0; i < 4; ++i)
         net_input[i] = sensors[i];
 
-      // 1.5. Random wandering activity (every 10 ticks)
-      if (t % 10 == 0) {
+      // 1.5. Random wandering activity (every 5 ticks)
+      if (t % RANDOM_ACTIVITY_PERIOD == 0) {
         std::uniform_int_distribution<int> rand_neuron_dist(6, BRAIN_SIZE - 1);
         for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
           int rand_idx = rand_neuron_dist(rng);
@@ -556,6 +578,13 @@ int main() {
 
       // 4. World Update
       auto res = world.update(m_left, m_right);
+
+      if (res.penalty) {
+        if (m_left)
+          brain.apply_causal_penalty(4, 0);
+        if (m_right)
+          brain.apply_causal_penalty(5, 0);
+      }
 
       // 5. Update Reward/Penalty for NEXT step
       current_reward = res.reward;
