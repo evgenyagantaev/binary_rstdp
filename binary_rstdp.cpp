@@ -22,21 +22,20 @@ void log_to_file(const std::string &message) {
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     std::tm buf;
     localtime_s(&buf, &in_time_t);
-    log_file << "["
-             << std::put_time(&buf, "%Y-%m-%d %H:%M:%S")
-             << "] " << message << std::endl;
+    log_file << "[" << std::put_time(&buf, "%Y-%m-%d %H:%M:%S") << "] "
+             << message << std::endl;
   }
 }
 
 // --- Neuron parameters ---
-const int V_THRESH = 7;
+const int V_THRESH = 2;
 const int V_REST = 0;
 const int REFRACTORY_PERIOD = 1;
-const int MEMBRANE_DECAY_PERIOD = 500;
+const int MEMBRANE_DECAY_PERIOD = 750;
 
 // --- Synapse / R-STDP parameters ---
-const int CONFIDENCE_MAX = 7;
-const int CONFIDENCE_THR = 5;
+const int CONFIDENCE_MAX = 17;
+const int CONFIDENCE_THR = 1;
 const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 1000;
 const int CONFIDENCE_LEAK_PERIOD = 50000;
@@ -49,7 +48,7 @@ const double CONNECTION_DENSITY = 0.5;
 const int CONFIDENCE_INIT_LOW = 1;
 const int CONFIDENCE_INIT_HIGH = 7;
 const int RANDOM_ACTIVITY_COUNT = 1;
-const int RANDOM_ACTIVITY_PERIOD = 5;
+const int RANDOM_ACTIVITY_PERIOD = 50;
 
 // --- Data structures ---
 
@@ -82,6 +81,7 @@ struct DigitalNeuron {
   int refractory_timer;
   bool spiked_this_step;
   int input_buffer;
+  int leak_timer;
 
   // History for causal tracing
   struct Contribution {
@@ -95,7 +95,7 @@ struct DigitalNeuron {
 
   DigitalNeuron(int _id)
       : id(_id), voltage(0), refractory_timer(0), spiked_this_step(false),
-        input_buffer(0) {
+        input_buffer(0), leak_timer(MEMBRANE_DECAY_PERIOD) {
     contrib_history.resize(MAX_HIST);
     spike_history.resize(MAX_HIST, false);
   }
@@ -115,47 +115,31 @@ public:
   }
 
   void connect_randomly(double density, std::mt19937 &rng) {
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
-    std::uniform_int_distribution<int> conf_dist(CONFIDENCE_INIT_LOW,
-                                                 CONFIDENCE_INIT_HIGH);
+    // 1. Deterministic Connection Chains
 
-    std::vector<int> sensor_source(neurons.size(), -1);
-    std::vector<int> motor_target(neurons.size(), -1);
+    // Chain 1: 0 -> 6 -> 7 -> 13 -> 12 -> 18 -> 19 -> 25 -> 24 -> 30 -> 4
+    connections[0].emplace_back(6, CONFIDENCE_MAX);
+    connections[6].emplace_back(7, CONFIDENCE_MAX);
+    connections[7].emplace_back(13, CONFIDENCE_MAX);
+    connections[13].emplace_back(12, CONFIDENCE_MAX);
+    connections[12].emplace_back(18, CONFIDENCE_MAX);
+    connections[18].emplace_back(19, CONFIDENCE_MAX);
+    connections[19].emplace_back(25, CONFIDENCE_MAX);
+    connections[25].emplace_back(24, CONFIDENCE_MAX);
+    connections[24].emplace_back(30, CONFIDENCE_MAX);
+    connections[30].emplace_back(4, CONFIDENCE_MAX);
 
-    // 1. Deterministic Connections (Sensors and Motors)
-    // Sensor 0 -> 6, 7, 8
-    for (int target : {6, 7, 8})
-      connections[0].emplace_back(target, CONFIDENCE_MAX);
-    // Sensor 2 -> 9, 10, 11
-    for (int target : {9, 10, 11})
-      connections[2].emplace_back(target, CONFIDENCE_MAX);
-    // 30, 31, 32 -> Motor 4
-    for (int source : {30, 31, 32})
-      connections[source].emplace_back(4, CONFIDENCE_MAX);
-    // 33, 34, 35 -> Motor 5
-    for (int source : {33, 34, 35})
-      connections[source].emplace_back(5, CONFIDENCE_MAX);
-
-    // 2. Random Hidden-to-Hidden Connections (Neurons 6 to 35)
-    std::vector<int> hidden_indices;
-    for (int i = 6; i < (int)neurons.size(); ++i)
-      hidden_indices.push_back(i);
-
-    std::vector<int> src_indices = hidden_indices;
-    std::vector<int> tgt_indices = hidden_indices;
-    std::shuffle(src_indices.begin(), src_indices.end(), rng);
-    std::shuffle(tgt_indices.begin(), tgt_indices.end(), rng);
-
-    for (int i : src_indices) {
-      for (int j : tgt_indices) {
-        if (i == j)
-          continue;
-        if (dist(rng) < density) {
-          int init_conf = conf_dist(rng);
-          connections[i].emplace_back(j, init_conf);
-        }
-      }
-    }
+    // Chain 2: 2 -> 9 -> 8 -> 14 -> 15 -> 21 -> 20 -> 26 -> 27 -> 33 -> 5
+    connections[2].emplace_back(9, CONFIDENCE_MAX);
+    connections[9].emplace_back(8, CONFIDENCE_MAX);
+    connections[8].emplace_back(14, CONFIDENCE_MAX);
+    connections[14].emplace_back(15, CONFIDENCE_MAX);
+    connections[15].emplace_back(21, CONFIDENCE_MAX);
+    connections[21].emplace_back(20, CONFIDENCE_MAX);
+    connections[20].emplace_back(26, CONFIDENCE_MAX);
+    connections[26].emplace_back(27, CONFIDENCE_MAX);
+    connections[27].emplace_back(33, CONFIDENCE_MAX);
+    connections[33].emplace_back(5, CONFIDENCE_MAX);
   }
 
   // sensory_input: number of input spikes per neuron at this timestep
@@ -164,8 +148,6 @@ public:
   void step(const std::vector<int> &sensory_input, bool reward_active,
             bool penalty_active) {
     ++global_tick;
-    const bool apply_decay = (global_tick % MEMBRANE_DECAY_PERIOD == 0);
-
     // 0. Update history and reset highlights
     for (auto &row : connections) {
       for (auto &syn : row)
@@ -184,15 +166,22 @@ public:
 
     // 1. Update neurons
     for (auto &n : neurons) {
+      bool potential_changed = false;
       n.spiked_this_step = false;
-      if (apply_decay && n.voltage > V_REST)
-        n.voltage--;
 
       if (n.refractory_timer > 0) {
         n.refractory_timer--;
         n.voltage = V_REST;
         n.input_buffer = 0;
+        n.leak_timer = MEMBRANE_DECAY_PERIOD;
       } else {
+        // Check for inputs
+        if (n.input_buffer > 0)
+          potential_changed = true;
+        if (n.id < static_cast<int>(sensory_input.size()) &&
+            sensory_input[n.id] > 0)
+          potential_changed = true;
+
         n.voltage += n.input_buffer;
         if (n.id < static_cast<int>(sensory_input.size())) {
           if (sensory_input[n.id] > 0)
@@ -204,6 +193,19 @@ public:
           n.voltage = V_REST;
           n.spiked_this_step = true;
           n.refractory_timer = REFRACTORY_PERIOD;
+          potential_changed = true;
+        }
+
+        if (potential_changed) {
+          n.leak_timer = MEMBRANE_DECAY_PERIOD;
+        } else if (n.voltage > V_REST) {
+          n.leak_timer--;
+          if (n.leak_timer <= 0) {
+            n.voltage--;
+            n.leak_timer = MEMBRANE_DECAY_PERIOD;
+          }
+        } else {
+          n.leak_timer = MEMBRANE_DECAY_PERIOD;
         }
       }
     }
@@ -310,52 +312,9 @@ public:
       DigitalSynapse &syn = connections[c.from_row][c.syn_idx];
       syn.highlighted = true;
       // If the source of this spike also spiked at the corresponding time,
-      // trace further. The contributors in history[depth] correspond to
-      // spikes in spike_history[depth].
+      // trace further.
       if (neurons[c.from_row].spike_history[depth]) {
         trace_causal_chain(c.from_row, depth + 1);
-      }
-    }
-  }
-
-  void apply_causal_penalty(int n_idx, int depth) {
-    if (depth >= DigitalNeuron::MAX_HIST)
-      return;
-    for (const auto &c : neurons[n_idx].contrib_history[depth]) {
-      DigitalSynapse &syn = connections[c.from_row][c.syn_idx];
-
-      // Penalize only hidden-to-hidden (not yellow/sensor, not green/motor)
-      bool is_fixed = (c.from_row < 4) ||
-                      (syn.target_neuron_idx >= 4 && syn.target_neuron_idx < 6);
-      if (!is_fixed && syn.confidence > 0) {
-        syn.confidence--;
-        syn.active = (syn.confidence >= CONFIDENCE_THR);
-        syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
-      }
-
-      if (neurons[c.from_row].spike_history[depth]) {
-        apply_causal_penalty(c.from_row, depth + 1);
-      }
-    }
-  }
-
-  void apply_causal_reward(int n_idx, int depth) {
-    if (depth >= DigitalNeuron::MAX_HIST)
-      return;
-    for (const auto &c : neurons[n_idx].contrib_history[depth]) {
-      DigitalSynapse &syn = connections[c.from_row][c.syn_idx];
-
-      // Reward only hidden-to-hidden (not yellow/sensor, not green/motor)
-      bool is_fixed = (c.from_row < 4) ||
-                      (syn.target_neuron_idx >= 4 && syn.target_neuron_idx < 6);
-      if (!is_fixed && syn.confidence < CONFIDENCE_MAX) {
-        syn.confidence++;
-        syn.active = (syn.confidence >= CONFIDENCE_THR);
-        syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
-      }
-
-      if (neurons[c.from_row].spike_history[depth]) {
-        apply_causal_reward(c.from_row, depth + 1);
       }
     }
   }
@@ -601,8 +560,7 @@ int main() {
 
         // 1.5. Random wandering activity (every 5 ticks)
         if (t % RANDOM_ACTIVITY_PERIOD == 0) {
-          std::uniform_int_distribution<int> rand_neuron_dist(6,
-                                                              BRAIN_SIZE - 1);
+          std::uniform_int_distribution<int> rand_neuron_dist(6, 29);
           for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
             int rand_idx = rand_neuron_dist(rng);
             net_input[rand_idx]++;
@@ -622,20 +580,6 @@ int main() {
 
         // 4. World Update
         auto res = world.update(m_left, m_right);
-
-        if (res.reward) {
-          if (m_left)
-            brain.apply_causal_reward(4, 0);
-          if (m_right)
-            brain.apply_causal_reward(5, 0);
-        }
-
-        if (res.penalty) {
-          if (m_left)
-            brain.apply_causal_penalty(4, 0);
-          if (m_right)
-            brain.apply_causal_penalty(5, 0);
-        }
 
         // 5. Update Reward/Penalty for NEXT step
         current_reward = res.reward;
