@@ -3,10 +3,23 @@ const http = require('http');
 const WebSocket = require('ws');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+
+const LOG_FILE = path.join(__dirname, 'server.log');
+
+function log(message) {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${message}\n`;
+    console.log(message);
+    fs.appendFileSync(LOG_FILE, logMessage);
+}
+
+// Clear log on startup
+fs.writeFileSync(LOG_FILE, `--- Server started at ${new Date().toISOString()} ---\n`);
 
 // Serve static files from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
@@ -15,19 +28,23 @@ app.use(express.static(path.join(__dirname, 'public')));
 const EXE_PATH = path.join(__dirname, '../x64/Debug/binary_rstdp.exe');
 const CMD = EXE_PATH;
 
-console.log(`Targeting executable: ${CMD}`);
+log(`Targeting executable: ${CMD}`);
 
 wss.on('connection', (ws) => {
-    console.log('Client connected');
-    console.log('Spawning C++ process...');
+    log('Client connected (WebSocket)');
+    log('Spawning C++ process...');
 
     let buffer = '';
     const process = spawn(CMD, [], {
         cwd: path.join(__dirname, '../')
     });
 
+    let lastFrameTime = 0;
+    const FRAME_INTERVAL = 33; // ~30 FPS
+
     process.stdout.on('data', (data) => {
-        buffer += data.toString();
+        const rawData = data.toString();
+        buffer += rawData;
 
         let boundary = buffer.indexOf('\n');
         while (boundary !== -1) {
@@ -35,28 +52,44 @@ wss.on('connection', (ws) => {
             buffer = buffer.substring(boundary + 1);
 
             if (line.startsWith('{') && line.endsWith('}')) {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(line);
+                const now = Date.now();
+                if (now - lastFrameTime >= FRAME_INTERVAL) {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        // Check backpressure
+                        if (ws.bufferedAmount < 1024 * 1024) { // 1MB limit
+                            ws.send(line);
+                            lastFrameTime = now;
+                        } else {
+                            // Drop frame if buffer is too full
+                        }
+                    }
                 }
-            } else if (line.startsWith('[WORLD]')) {
+            } else if (line.length > 0) {
+                log(`[CPP STDOUT] ${line}`);
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ log: line }));
                 }
-            } else if (line.startsWith('[CPP]')) {
-                // Also forward logging from C++ stderr/stdout if it appears here (depends on C++ impl)
-                console.log(line);
             }
 
             boundary = buffer.indexOf('\n');
         }
     });
 
+
     process.stderr.on('data', (data) => {
-        console.error(`stderr: ${data}`);
+        log(`[CPP STDERR] ${data.toString().trim()}`);
+    });
+
+    process.on('error', (err) => {
+        log(`[CPP ERROR] Failed to start process: ${err.message}`);
+    });
+
+    process.on('exit', (code, signal) => {
+        log(`[CPP EXIT] Process exited with code ${code}, signal ${signal}`);
     });
 
     process.on('close', (code) => {
-        console.log(`C++ process exited with code ${code}`);
+        log(`[CPP CLOSE] Process closed with code ${code}`);
         if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ status: 'stopped', code }));
         }
@@ -64,22 +97,27 @@ wss.on('connection', (ws) => {
 
     ws.on('message', (message) => {
         const msg = message.toString();
-        console.log('Received from Client:', msg);
+        log(`[WS MESSAGE] Received: ${msg}`);
         if (process.stdin) {
-            console.log('Writing to C++ stdin:', msg);
+            log(`[CPP STDIN] Writing: ${msg}`);
             process.stdin.write(msg + '\n');
         } else {
-            console.error('C++ stdin not available');
+            log('[CPP STDIN] Error: stdin not available');
         }
     });
 
     ws.on('close', () => {
-        console.log('Client disconnected, killing process');
+        log('Client disconnected (WebSocket), killing C++ process');
         process.kill();
+    });
+
+    ws.on('error', (err) => {
+        log(`[WS ERROR] ${err.message}`);
     });
 });
 
 const PORT = 8080;
 server.listen(PORT, () => {
-    console.log(`Server started on http://localhost:${PORT}`);
+    log(`Server listening on http://localhost:${PORT}`);
 });
+

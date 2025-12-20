@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -10,6 +11,22 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+// --- Logging System ---
+std::mutex g_log_mutex;
+void log_to_file(const std::string &message) {
+  std::lock_guard<std::mutex> lock(g_log_mutex);
+  std::ofstream log_file("backend.log", std::ios_base::app);
+  if (log_file.is_open()) {
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    std::tm buf;
+    localtime_s(&buf, &in_time_t);
+    log_file << "["
+             << std::put_time(&buf, "%Y-%m-%d %H:%M:%S")
+             << "] " << message << std::endl;
+  }
+}
 
 // --- Neuron parameters ---
 const int V_THRESH = 7;
@@ -469,6 +486,7 @@ std::atomic<bool> g_running(true);
 void input_listener() {
   std::string cmd;
   while (std::cin >> cmd) {
+    log_to_file("Received command: " + cmd);
     std::cerr << "[CPP] Received command: " << cmd << std::endl;
     if (cmd == "stop") {
       g_running = false;
@@ -482,6 +500,7 @@ void input_listener() {
     } else if (cmd == "speed") {
       int val;
       if (std::cin >> val) {
+        log_to_file("Speed value received: " + std::to_string(val));
         std::cerr << "[CPP] Speed value: " << val << std::endl;
         if (val < 0)
           val = 0;
@@ -531,100 +550,111 @@ void print_json_state(const SpikingNet &net, const World &world, int tick) {
 }
 
 int main() {
-  // Launch input listener thread
-  std::thread input_thread(input_listener);
-  input_thread.detach();
+  try {
+    log_to_file("Process started");
 
-  while (g_running) {
+    // Launch input listener thread
+    std::thread input_thread(input_listener);
+    input_thread.detach();
 
-    // --- Initialization ---
-    SpikingNet brain(BRAIN_SIZE);
-    std::mt19937 rng(static_cast<unsigned int>(
-        std::chrono::system_clock::now().time_since_epoch().count()));
-    brain.connect_randomly(CONNECTION_DENSITY, rng);
-    World world;
+    while (g_running) {
+      log_to_file("Entering simulation loop");
 
-    // Reset flag cleared
-    g_reset = false;
+      // --- Initialization ---
+      SpikingNet brain(BRAIN_SIZE);
+      std::mt19937 rng(static_cast<unsigned int>(
+          std::chrono::system_clock::now().time_since_epoch().count()));
+      brain.connect_randomly(CONNECTION_DENSITY, rng);
+      World world;
 
-    // Reward/Penalty logic state
-    bool current_reward = true; // Initially true during constant duration
-    bool current_penalty = false;
+      // Reset flag cleared
+      g_reset = false;
 
-    // --- Simulation Loop ---
-    for (int t = 0; g_running && !g_reset; ++t) {
+      // Reward/Penalty logic state
+      bool current_reward = true; // Initially true during constant duration
+      bool current_penalty = false;
 
-      // Output state FIRST (so we see initial state or current state)
-      print_json_state(brain, world, t);
+      // --- Simulation Loop ---
+      for (int t = 0; g_running && !g_reset; ++t) {
+        // Output state FIRST (so we see initial state or current state)
+        print_json_state(brain, world, t);
 
-      // Wait if paused or for speed control
-      int delay = g_delay_ms;
-      if (g_paused) {
-        while (g_paused && g_running && !g_reset) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Wait if paused or for speed control
+        int delay = g_delay_ms;
+        if (g_paused) {
+          while (g_paused && g_running && !g_reset) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          }
+          delay = 0;
         }
-        delay =
-            0; // Don't double wait after unpause immediately, or do? It's fine.
-      }
-      if (delay > 0)
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+        if (delay > 0)
+          std::this_thread::sleep_for(std::chrono::milliseconds(delay));
 
-      if (!g_running || g_reset)
-        break;
+        if (!g_running || g_reset)
+          break;
 
-      // 1. Sensors
-      auto sensors = world.get_sensors();
-      std::vector<int> net_input(BRAIN_SIZE, 0);
-      for (int i = 0; i < 4; ++i)
-        net_input[i] = sensors[i];
+        // 1. Sensors
+        auto sensors = world.get_sensors();
+        std::vector<int> net_input(BRAIN_SIZE, 0);
+        for (int i = 0; i < 4; ++i)
+          net_input[i] = sensors[i];
 
-      // 1.5. Random wandering activity (every 5 ticks)
-      if (t % RANDOM_ACTIVITY_PERIOD == 0) {
-        std::uniform_int_distribution<int> rand_neuron_dist(6, BRAIN_SIZE - 1);
-        for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
-          int rand_idx = rand_neuron_dist(rng);
-          net_input[rand_idx]++;
+        // 1.5. Random wandering activity (every 5 ticks)
+        if (t % RANDOM_ACTIVITY_PERIOD == 0) {
+          std::uniform_int_distribution<int> rand_neuron_dist(6,
+                                                              BRAIN_SIZE - 1);
+          for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
+            int rand_idx = rand_neuron_dist(rng);
+            net_input[rand_idx]++;
+          }
         }
+
+        // 2. Brain Step
+        bool force_reward = (t < CONSTANT_REWARD_DURATION);
+        brain.step(net_input, force_reward || current_reward,
+                   (!force_reward) && current_penalty);
+
+        // 3. Motors
+        bool m_left = brain.neurons[4].spiked_this_step;
+        bool m_right = brain.neurons[5].spiked_this_step;
+        if (m_left && m_right)
+          m_left = false;
+
+        // 4. World Update
+        auto res = world.update(m_left, m_right);
+
+        if (res.reward) {
+          if (m_left)
+            brain.apply_causal_reward(4, 0);
+          if (m_right)
+            brain.apply_causal_reward(5, 0);
+        }
+
+        if (res.penalty) {
+          if (m_left)
+            brain.apply_causal_penalty(4, 0);
+          if (m_right)
+            brain.apply_causal_penalty(5, 0);
+        }
+
+        // 5. Update Reward/Penalty for NEXT step
+        current_reward = res.reward;
+        current_penalty = res.penalty;
       }
 
-      // 2. Brain Step
-      bool force_reward = (t < CONSTANT_REWARD_DURATION);
-      brain.step(net_input, force_reward || current_reward,
-                 (!force_reward) && current_penalty);
-
-      // 3. Motors
-      bool m_left = brain.neurons[4].spiked_this_step;
-      bool m_right = brain.neurons[5].spiked_this_step;
-      if (m_left && m_right)
-        m_left = false;
-
-      // 4. World Update
-      auto res = world.update(m_left, m_right);
-
-      if (res.reward) {
-        if (m_left)
-          brain.apply_causal_reward(4, 0);
-        if (m_right)
-          brain.apply_causal_reward(5, 0);
+      if (g_reset) {
+        log_to_file("Simulation reset triggered");
       }
-
-      if (res.penalty) {
-        if (m_left)
-          brain.apply_causal_penalty(4, 0);
-        if (m_right)
-          brain.apply_causal_penalty(5, 0);
-      }
-
-      // 5. Update Reward/Penalty for NEXT step
-      current_reward = res.reward;
-      current_penalty = res.penalty;
     }
-
-    if (g_reset) {
-      // Loop triggers again, re-initializing everything
-      // Just a small notification log?
-      // std::cout << "{\"log\":\"Sim Reset\"}" << std::endl;
-    }
+    log_to_file("Process exiting normally");
+  } catch (const std::exception &e) {
+    log_to_file("CRITICAL ERROR: " + std::string(e.what()));
+    std::cerr << "[CPP ERROR] " << e.what() << std::endl;
+    return 1;
+  } catch (...) {
+    log_to_file("CRITICAL ERROR: Unknown exception");
+    std::cerr << "[CPP ERROR] Unknown exception" << std::endl;
+    return 1;
   }
   return 0;
 }

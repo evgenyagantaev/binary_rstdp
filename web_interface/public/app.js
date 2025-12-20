@@ -217,6 +217,7 @@ function updateVisuals(data) {
 
 // WebSocket Logic
 socket.onopen = () => {
+    console.log('[WS] Connected to server');
     statusEl.textContent = 'Connected';
     statusEl.classList.remove('disconnected');
     statusEl.classList.add('connected');
@@ -226,11 +227,17 @@ socket.onopen = () => {
     socket.send('speed ' + val);
 };
 
-socket.onclose = () => {
+socket.onclose = (event) => {
+    console.warn(`[WS] Disconnected. Code: ${event.code}, Reason: ${event.reason}`);
     statusEl.textContent = 'Disconnected';
     statusEl.classList.remove('connected');
     statusEl.classList.add('disconnected');
 };
+
+socket.onerror = (error) => {
+    console.error('[WS] Error:', error);
+};
+
 
 socket.onmessage = (event) => {
     try {
