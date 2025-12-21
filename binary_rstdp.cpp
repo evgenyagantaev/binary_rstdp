@@ -34,19 +34,19 @@ const int REFRACTORY_PERIOD = 1;
 const int MEMBRANE_DECAY_PERIOD = 750;
 
 // --- Synapse / R-STDP parameters ---
-const int CONFIDENCE_MAX = 17;
+const int CONFIDENCE_MAX = 2;
 const int CONFIDENCE_THR = 1;
 const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 1000;
-const int CONFIDENCE_LEAK_PERIOD = 50000;
+const int CONFIDENCE_LEAK_PERIOD = 500;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
 const int BRAIN_SIZE = 36; // 4 sensors + 2 motors + 30 hidden
-const int CONSTANT_REWARD_DURATION = 5000;
+const int CONSTANT_REWARD_DURATION = 0;
 const double CONNECTION_DENSITY = 0.5;
-const int CONFIDENCE_INIT_LOW = 1;
-const int CONFIDENCE_INIT_HIGH = 7;
+const int CONFIDENCE_INIT_LOW = CONFIDENCE_THR;
+const int CONFIDENCE_INIT_HIGH = CONFIDENCE_MAX;
 const int RANDOM_ACTIVITY_COUNT = 1;
 const int RANDOM_ACTIVITY_PERIOD = 50;
 
@@ -117,29 +117,27 @@ public:
   void connect_randomly(double density, std::mt19937 &rng) {
     // 1. Deterministic Connection Chains
 
-    // Chain 1: 0 -> 6 -> 7 -> 13 -> 12 -> 18 -> 19 -> 25 -> 24 -> 30 -> 4
+    // Chain 1: 0-6-30-4
     connections[0].emplace_back(6, CONFIDENCE_MAX);
-    connections[6].emplace_back(7, CONFIDENCE_MAX);
-    connections[7].emplace_back(13, CONFIDENCE_MAX);
-    connections[13].emplace_back(12, CONFIDENCE_MAX);
-    connections[12].emplace_back(18, CONFIDENCE_MAX);
-    connections[18].emplace_back(19, CONFIDENCE_MAX);
-    connections[19].emplace_back(25, CONFIDENCE_MAX);
-    connections[25].emplace_back(24, CONFIDENCE_MAX);
-    connections[24].emplace_back(30, CONFIDENCE_MAX);
+    connections[6].emplace_back(30, CONFIDENCE_MAX);
     connections[30].emplace_back(4, CONFIDENCE_MAX);
 
-    // Chain 2: 2 -> 9 -> 8 -> 14 -> 15 -> 21 -> 20 -> 26 -> 27 -> 33 -> 5
-    connections[2].emplace_back(9, CONFIDENCE_MAX);
-    connections[9].emplace_back(8, CONFIDENCE_MAX);
-    connections[8].emplace_back(14, CONFIDENCE_MAX);
-    connections[14].emplace_back(15, CONFIDENCE_MAX);
-    connections[15].emplace_back(21, CONFIDENCE_MAX);
-    connections[21].emplace_back(20, CONFIDENCE_MAX);
-    connections[20].emplace_back(26, CONFIDENCE_MAX);
-    connections[26].emplace_back(27, CONFIDENCE_MAX);
-    connections[27].emplace_back(33, CONFIDENCE_MAX);
+    // Chain 2: 0-7-25-33-5
+    connections[0].emplace_back(7, CONFIDENCE_MAX);
+    connections[7].emplace_back(25, CONFIDENCE_MAX);
+    connections[25].emplace_back(33, CONFIDENCE_MAX);
     connections[33].emplace_back(5, CONFIDENCE_MAX);
+
+    // Chain 3: 2-9-33-5
+    connections[2].emplace_back(9, CONFIDENCE_MAX);
+    connections[9].emplace_back(33, CONFIDENCE_MAX);
+    connections[33].emplace_back(5, CONFIDENCE_MAX);
+
+    // Chain 4: 2-8-26-30-4
+    connections[2].emplace_back(8, CONFIDENCE_MAX);
+    connections[8].emplace_back(26, CONFIDENCE_MAX);
+    connections[26].emplace_back(30, CONFIDENCE_MAX);
+    connections[30].emplace_back(4, CONFIDENCE_MAX);
   }
 
   // sensory_input: number of input spikes per neuron at this timestep
@@ -558,25 +556,18 @@ int main() {
         for (int i = 0; i < 4; ++i)
           net_input[i] = sensors[i];
 
-        // 1.5. Random wandering activity (every 5 ticks)
-        if (t % RANDOM_ACTIVITY_PERIOD == 0) {
-          std::uniform_int_distribution<int> rand_neuron_dist(6, 29);
-          for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
-            int rand_idx = rand_neuron_dist(rng);
-            net_input[rand_idx]++;
-          }
-        }
-
-        // 2. Brain Step
-        bool force_reward = (t < CONSTANT_REWARD_DURATION);
+        // 5. Brain Step
+        bool force_reward = false;
         brain.step(net_input, force_reward || current_reward,
                    (!force_reward) && current_penalty);
 
         // 3. Motors
         bool m_left = brain.neurons[4].spiked_this_step;
         bool m_right = brain.neurons[5].spiked_this_step;
-        if (m_left && m_right)
+        if (m_left && m_right) {
           m_left = false;
+          m_right = false;
+        }
 
         // 4. World Update
         auto res = world.update(m_left, m_right);
