@@ -11,6 +11,8 @@ const targetTypeEl = document.getElementById('targetType');
 
 const agentEl = document.getElementById('agent');
 const targetEl = document.getElementById('target');
+const rewardSignalEl = document.getElementById('rewardSignal');
+const penaltySignalEl = document.getElementById('penaltySignal');
 
 // Configuration
 const GRID_SIZE = 6;
@@ -212,6 +214,16 @@ function updateVisuals(data) {
                 targetEl.textContent = 'F';
             }
         }
+    }
+
+    // 4. Update Signals
+    if (data.reward !== undefined) {
+        if (data.reward) rewardSignalEl.classList.add('active');
+        else rewardSignalEl.classList.remove('active');
+    }
+    if (data.penalty !== undefined) {
+        if (data.penalty) penaltySignalEl.classList.add('active');
+        else penaltySignalEl.classList.remove('active');
     }
 }
 

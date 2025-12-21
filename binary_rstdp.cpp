@@ -38,7 +38,7 @@ const int CONFIDENCE_MAX = 2;
 const int CONFIDENCE_THR = 1;
 const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 1000;
-const int CONFIDENCE_LEAK_PERIOD = 500;
+const int CONFIDENCE_LEAK_PERIOD = 1300;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
@@ -260,12 +260,14 @@ public:
           if (reward_active) {
             if (syn.eligible_for_LTP && syn.confidence < CONFIDENCE_MAX) {
               syn.confidence++;
+              syn.active = (syn.confidence >= CONFIDENCE_THR);
               syn.eligible_for_LTP = false;
               syn.eligibility_ltp_timer = 0;
               syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
             }
             if (syn.eligible_for_LTD && syn.confidence > 0) {
               syn.confidence--;
+              syn.active = (syn.confidence >= CONFIDENCE_THR);
               syn.eligible_for_LTD = false;
               syn.eligibility_ltd_timer = 0;
               syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
@@ -273,6 +275,7 @@ public:
           } else if (penalty_active) {
             if (syn.eligible_for_LTP && syn.confidence > 0) {
               syn.confidence--;
+              syn.active = (syn.confidence >= CONFIDENCE_THR);
               syn.eligible_for_LTP = false;
               syn.eligibility_ltp_timer = 0;
               syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
@@ -289,6 +292,7 @@ public:
             syn.confidence_leak_timer--;
           if (syn.confidence_leak_timer == 0) {
             syn.confidence >>= 1;
+            syn.active = (syn.confidence >= CONFIDENCE_THR);
             syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
           }
         }
@@ -467,8 +471,11 @@ void input_listener() {
   }
 }
 
-void print_json_state(const SpikingNet &net, const World &world, int tick) {
+void print_json_state(const SpikingNet &net, const World &world, int tick,
+                      bool reward, bool penalty) {
   std::cout << "{";
+  std::cout << "\"reward\":" << (reward ? "true" : "false") << ",";
+  std::cout << "\"penalty\":" << (penalty ? "true" : "false") << ",";
   std::cout << "\"t\":" << tick << ",";
 
   std::cout << "\"world\":{";
@@ -531,10 +538,19 @@ int main() {
       bool current_reward = true; // Initially true during constant duration
       bool current_penalty = false;
 
+      // Phase Control variables
+      int current_phase = 0; // 0 for neuron 9, 1 for neuron 8
+      int activation_timer = 0;
+
       // --- Simulation Loop ---
       for (int t = 0; g_running && !g_reset; ++t) {
+        // Force world state: Danger at extreme left
+        world.target_type = DANGER;
+        world.target_pos = 0;
+        world.target_timer = 100000;
+
         // Output state FIRST (so we see initial state or current state)
-        print_json_state(brain, world, t);
+        print_json_state(brain, world, t, current_reward, current_penalty);
 
         // Wait if paused or for speed control
         int delay = g_delay_ms;
@@ -550,11 +566,24 @@ int main() {
         if (!g_running || g_reset)
           break;
 
-        // 1. Sensors
+        // 1. Sensors (Ignore sensor 2 as requested)
         auto sensors = world.get_sensors();
         std::vector<int> net_input(BRAIN_SIZE, 0);
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 4; ++i) {
+          if (i == 2)
+            continue;
           net_input[i] = sensors[i];
+        }
+
+        // Direct Neuron Activation logic
+        int target_neuron = (current_phase == 0) ? 9 : 8;
+        net_input[target_neuron]++;
+        activation_timer++;
+
+        if (activation_timer >= 1000) {
+          activation_timer = 0;
+          current_phase = 1 - current_phase;
+        }
 
         // 5. Brain Step
         bool force_reward = false;
@@ -571,6 +600,11 @@ int main() {
 
         // 4. World Update
         auto res = world.update(m_left, m_right);
+
+        // Check for boundaries to reset
+        if (world.agent_pos >= WORLD_SIZE - 1 || world.agent_pos <= 0) {
+          world.agent_pos = WORLD_SIZE / 2;
+        }
 
         // 5. Update Reward/Penalty for NEXT step
         current_reward = res.reward;

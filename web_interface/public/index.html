@@ -37,12 +37,20 @@
         </header>
 
         <main class="visualization-container">
-            <!-- Grid for Neurons -->
-            <div id="neuronGrid" class="neuron-grid">
-                <!-- Neurons will be injected here by JS -->
+            <div class="main-layout">
+                <!-- Signal Indicators -->
+                <div class="signal-panel">
+                    <div id="rewardSignal" class="signal reward">REWARD</div>
+                    <div id="penaltySignal" class="signal penalty">PENALTY</div>
+                </div>
 
-                <!-- Canvas for connections (Synapses) -->
-                <canvas id="synapseCanvas"></canvas>
+                <!-- Grid for Neurons -->
+                <div id="neuronGrid" class="neuron-grid">
+                    <!-- Neurons will be injected here by JS -->
+
+                    <!-- Canvas for connections (Synapses) -->
+                    <canvas id="synapseCanvas"></canvas>
+                </div>
             </div>
 
             <!-- World View (Agent & Target) -->
