@@ -48,7 +48,7 @@ const double CONNECTION_DENSITY = 0.5;
 const int CONFIDENCE_INIT_LOW = CONFIDENCE_THR;
 const int CONFIDENCE_INIT_HIGH = CONFIDENCE_MAX;
 const int RANDOM_ACTIVITY_COUNT = 1;
-const int RANDOM_ACTIVITY_PERIOD = 50;
+const int RANDOM_ACTIVITY_PERIOD = 5;
 
 // --- Data structures ---
 
@@ -538,10 +538,6 @@ int main() {
       bool current_reward = true; // Initially true during constant duration
       bool current_penalty = false;
 
-      // Phase Control variables
-      int current_phase = 0; // 0 for neuron 9, 1 for neuron 8
-      int activation_timer = 0;
-
       // --- Simulation Loop ---
       for (int t = 0; g_running && !g_reset; ++t) {
         // Force world state: Danger at extreme left
@@ -566,23 +562,21 @@ int main() {
         if (!g_running || g_reset)
           break;
 
-        // 1. Sensors (Ignore sensor 2 as requested)
+        // 1. Sensors
         auto sensors = world.get_sensors();
         std::vector<int> net_input(BRAIN_SIZE, 0);
         for (int i = 0; i < 4; ++i) {
-          if (i == 2)
-            continue;
           net_input[i] = sensors[i];
         }
 
-        // Direct Neuron Activation logic
-        int target_neuron = (current_phase == 0) ? 9 : 8;
-        net_input[target_neuron]++;
-        activation_timer++;
-
-        if (activation_timer >= 1000) {
-          activation_timer = 0;
-          current_phase = 1 - current_phase;
+        // 1.5. Random wandering activity
+        if (RANDOM_ACTIVITY_PERIOD > 0 && t % RANDOM_ACTIVITY_PERIOD == 0) {
+          std::uniform_int_distribution<int> rand_neuron_dist(6,
+                                                              BRAIN_SIZE - 1);
+          for (int i = 0; i < RANDOM_ACTIVITY_COUNT; ++i) {
+            int rand_idx = rand_neuron_dist(rng);
+            net_input[rand_idx]++;
+          }
         }
 
         // 5. Brain Step

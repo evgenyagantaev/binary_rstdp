@@ -3,7 +3,7 @@ import ollama
 # Убедись, что само приложение Ollama запущено в фоне!
 
 # Простой запрос (чат)
-response = ollama.chat(model='gemma3:1b', messages=[
+response = ollama.chat(model='gemma3:4b', messages=[
   {
     'role': 'user',
     'content': 'write a command of light turning off in the kitchen in structured format json',
