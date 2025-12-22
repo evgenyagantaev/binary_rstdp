@@ -37,9 +37,9 @@ const int MEMBRANE_DECAY_PERIOD = 750;
 const int CONFIDENCE_MAX = 5;
 const int CONFIDENCE_THR = 1;
 const int SPIKE_TRACE_WINDOW = 10;
-const int ELIGIBILITY_TRACE_WINDOW = 1000;
+const int ELIGIBILITY_TRACE_WINDOW = 100;
 const int CONFIDENCE_LEAK_PERIOD = 5300;
-const int REINFORCEMENT_INERTIA_PERIOD = 5;
+const int REINFORCEMENT_INERTIA_PERIOD = 10;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
@@ -49,7 +49,7 @@ const double CONNECTION_DENSITY = 0.1;
 const int CONFIDENCE_INIT_LOW = CONFIDENCE_THR;
 const int CONFIDENCE_INIT_HIGH = CONFIDENCE_MAX;
 const int RANDOM_ACTIVITY_COUNT = 1;
-const int RANDOM_ACTIVITY_PERIOD = 5;
+const int RANDOM_ACTIVITY_PERIOD = 2;
 
 // --- Data structures ---
 
@@ -150,6 +150,15 @@ public:
       for (int j : hidden_indices) {
         if (i == j)
           continue;
+
+        // Constraint 1: Post-sensory (6-11) can't connect to each other
+        if (i >= 6 && i <= 11 && j >= 6 && j <= 11)
+          continue;
+
+        // Constraint 2: Pre-motor (30-35) can't connect to each other
+        if (i >= 30 && i <= 35 && j >= 30 && j <= 35)
+          continue;
+
         if (dist(rng) < density) {
           int init_conf = conf_dist(rng);
           connections[i].emplace_back(j, init_conf);
@@ -164,20 +173,10 @@ public:
   void step(const std::vector<int> &sensory_input, bool reward_active,
             bool penalty_active) {
     ++global_tick;
-    // 0. Update history and reset highlights
+    // 0. Update highlights and tick
     for (auto &row : connections) {
       for (auto &syn : row)
         syn.highlighted = false;
-    }
-    for (auto &n : neurons) {
-      // Shift history using move to avoid copies
-      for (int h = n.MAX_HIST - 1; h > 0; --h) {
-        n.contrib_history[h] = std::move(n.contrib_history[h - 1]);
-        n.spike_history[h] = n.spike_history[h - 1];
-      }
-      n.contrib_history[0] = std::move(n.next_contributors);
-      n.spike_history[0] = n.spiked_this_step;
-      n.next_contributors.clear();
     }
 
     // 1. Update neurons
@@ -348,14 +347,27 @@ public:
     for (int m = 4; m <= 5; ++m) {
       trace_causal_chain(m);
     }
+
+    // 4. Finally Shift history for next step
+    for (auto &n : neurons) {
+      for (int h = DigitalNeuron::MAX_HIST - 1; h > 0; --h) {
+        n.contrib_history[h] = std::move(n.contrib_history[h - 1]);
+        n.spike_history[h] = n.spike_history[h - 1];
+      }
+      n.contrib_history[0] = std::move(n.next_contributors);
+      n.spike_history[0] = n.spiked_this_step;
+      n.next_contributors.clear();
+    }
   }
 
   void trace_causal_chain(int motor_idx) {
-    // We trace back from motor_idx through history.
-    // To avoid exponential explosion, we track which (neuron, depth) we've
-    // visited.
+    if (!neurons[motor_idx].spiked_this_step)
+      return;
+
+    // visited[depth] maps to history: depth 0 is current (T), depth 1 is T-1,
+    // etc.
     std::vector<std::vector<bool>> visited(
-        DigitalNeuron::MAX_HIST, std::vector<bool>(neurons.size(), false));
+        DigitalNeuron::MAX_HIST + 1, std::vector<bool>(neurons.size(), false));
 
     struct Pending {
       int idx;
@@ -363,33 +375,48 @@ public:
     };
     std::vector<Pending> stack;
 
-    // If motor spiked in the last step, start tracing from depth 0
-    if (neurons[motor_idx].spike_history[0]) {
-      stack.push_back({motor_idx, 0});
-      visited[0][motor_idx] = true;
-    }
+    stack.push_back({motor_idx, 0});
+    visited[0][motor_idx] = true;
 
     while (!stack.empty()) {
       Pending p = stack.back();
       stack.pop_back();
 
-      if (p.depth >= DigitalNeuron::MAX_HIST)
-        continue;
+      if (p.depth == 0) {
+        // Current spike at T, use its immediate contributors
+        for (const auto &c : neurons[p.idx].next_contributors) {
+          if (c.from_row >= 0 && c.from_row < (int)connections.size()) {
+            connections[c.from_row][c.syn_idx].highlighted = true;
+            // Parents of current spike must have spiked at T-1
+            // T-1 is stored in spike_history[0] (we are at step T)
+            if (neurons[c.from_row].spike_history[0] &&
+                !visited[1][c.from_row]) {
+              visited[1][c.from_row] = true;
+              stack.push_back({c.from_row, 1});
+            }
+          }
+        }
+      } else {
+        // Ancestor spike at T - p.depth. Its contributors are in
+        // contrib_history[p.depth - 1]
+        int hist_idx = p.depth - 1;
+        if (hist_idx >= DigitalNeuron::MAX_HIST)
+          continue;
 
-      // For the given neuron at given depth, highlight all synapses that
-      // contributed to its spike
-      for (const auto &c : neurons[p.idx].contrib_history[p.depth]) {
-        if (c.from_row >= 0 && c.from_row < (int)connections.size()) {
-          connections[c.from_row][c.syn_idx].highlighted = true;
+        for (const auto &c : neurons[p.idx].contrib_history[hist_idx]) {
+          if (c.from_row >= 0 && c.from_row < (int)connections.size()) {
+            connections[c.from_row][c.syn_idx].highlighted = true;
 
-          // If the contributing neuron also spiked at its time, continue
-          // tracing
-          int next_depth = p.depth + 1;
-          if (next_depth < DigitalNeuron::MAX_HIST) {
-            if (neurons[c.from_row].spike_history[next_depth] &&
-                !visited[next_depth][c.from_row]) {
-              visited[next_depth][c.from_row] = true;
-              stack.push_back({c.from_row, next_depth});
+            int next_depth = p.depth + 1;
+            // Ancestors of T-p.depth spiked at T-(p.depth+1)
+            // T-(p.depth+1) is in spike_history[p.depth]
+            if (next_depth <= DigitalNeuron::MAX_HIST &&
+                p.depth < DigitalNeuron::MAX_HIST) {
+              if (neurons[c.from_row].spike_history[p.depth] &&
+                  !visited[next_depth][c.from_row]) {
+                visited[next_depth][c.from_row] = true;
+                stack.push_back({c.from_row, next_depth});
+              }
             }
           }
         }
@@ -434,9 +461,8 @@ struct World {
       target_type = NONE;
     } else {
       target_type = (choice == 0) ? FOOD : DANGER;
-      // Spawn target strictly to the LEFT of the agent's reset position
-      std::uniform_int_distribution<int> pos_dist(0, agent_pos - 1);
-      target_pos = pos_dist(rng);
+      // Fixed spawn at the extreme left of the visible world
+      target_pos = 0;
     }
   }
 
