@@ -39,6 +39,7 @@ const int CONFIDENCE_THR = 1;
 const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 1000;
 const int CONFIDENCE_LEAK_PERIOD = 5300;
+const int REINFORCEMENT_INERTIA_PERIOD = 5;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
@@ -67,12 +68,19 @@ struct DigitalSynapse {
   int confidence_leak_timer;
   bool highlighted;
 
+  bool reward_acceptor;
+  bool penalty_acceptor;
+  int reward_inertia_counter;
+  int penalty_inertia_counter;
+
   DigitalSynapse(int target, int init_conf = 1)
       : target_neuron_idx(target), confidence(init_conf),
         active(init_conf >= CONFIDENCE_THR), ltp_timer(0), ltd_timer(0),
         eligible_for_LTP(false), eligible_for_LTD(false),
         eligibility_ltp_timer(0), eligibility_ltd_timer(0),
-        confidence_leak_timer(CONFIDENCE_LEAK_PERIOD), highlighted(false) {}
+        confidence_leak_timer(CONFIDENCE_LEAK_PERIOD), highlighted(false),
+        reward_acceptor(true), penalty_acceptor(true),
+        reward_inertia_counter(0), penalty_inertia_counter(0) {}
 };
 
 struct DigitalNeuron {
@@ -162,12 +170,12 @@ public:
         syn.highlighted = false;
     }
     for (auto &n : neurons) {
-      // Shift history
+      // Shift history using move to avoid copies
       for (int h = n.MAX_HIST - 1; h > 0; --h) {
-        n.contrib_history[h] = n.contrib_history[h - 1];
+        n.contrib_history[h] = std::move(n.contrib_history[h - 1]);
         n.spike_history[h] = n.spike_history[h - 1];
       }
-      n.contrib_history[0] = n.next_contributors;
+      n.contrib_history[0] = std::move(n.next_contributors);
       n.spike_history[0] = n.spiked_this_step;
       n.next_contributors.clear();
     }
@@ -238,6 +246,18 @@ public:
           if (syn.ltd_timer > 0)
             syn.ltd_timer--;
 
+          // Reinforcement Inertia counters
+          if (syn.reward_inertia_counter > 0) {
+            syn.reward_inertia_counter--;
+            if (syn.reward_inertia_counter == 0)
+              syn.reward_acceptor = true;
+          }
+          if (syn.penalty_inertia_counter > 0) {
+            syn.penalty_inertia_counter--;
+            if (syn.penalty_inertia_counter == 0)
+              syn.penalty_acceptor = true;
+          }
+
           if (syn.eligibility_ltp_timer > 0) {
             syn.eligibility_ltp_timer--;
             if (syn.eligibility_ltp_timer == 0)
@@ -267,28 +287,43 @@ public:
           }
 
           // Learning
-          if (reward_active) {
+          if (reward_active && syn.reward_acceptor) {
+            bool modified = false;
             if (syn.eligible_for_LTP && syn.confidence < CONFIDENCE_MAX) {
               syn.confidence++;
               syn.active = (syn.confidence >= CONFIDENCE_THR);
               syn.eligible_for_LTP = false;
               syn.eligibility_ltp_timer = 0;
               syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+              modified = true;
             }
-            if (syn.eligible_for_LTD && syn.confidence > 0) {
+            if (!modified && syn.eligible_for_LTD && syn.confidence > 0) {
               syn.confidence--;
               syn.active = (syn.confidence >= CONFIDENCE_THR);
               syn.eligible_for_LTD = false;
               syn.eligibility_ltd_timer = 0;
               syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+              modified = true;
             }
-          } else if (penalty_active) {
+            if (modified) {
+              // Block penalty for a while
+              syn.penalty_acceptor = false;
+              syn.penalty_inertia_counter = REINFORCEMENT_INERTIA_PERIOD;
+            }
+          } else if (penalty_active && syn.penalty_acceptor) {
+            bool modified = false;
             if (syn.eligible_for_LTP && syn.confidence > 0) {
               syn.confidence--;
               syn.active = (syn.confidence >= CONFIDENCE_THR);
               syn.eligible_for_LTP = false;
               syn.eligibility_ltp_timer = 0;
               syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
+              modified = true;
+            }
+            if (modified) {
+              // Block reward for a while
+              syn.reward_acceptor = false;
+              syn.reward_inertia_counter = REINFORCEMENT_INERTIA_PERIOD;
             }
             // LTD + PENALTY is ignored per user request
             if (syn.eligible_for_LTD) {
@@ -311,22 +346,53 @@ public:
 
     // 3. Causal Tracing from Motor Neurons
     for (int m = 4; m <= 5; ++m) {
-      if (neurons[m].spiked_this_step) {
-        trace_causal_chain(m, 0);
-      }
+      trace_causal_chain(m);
     }
   }
 
-  void trace_causal_chain(int n_idx, int depth) {
-    if (depth >= DigitalNeuron::MAX_HIST)
-      return;
-    for (const auto &c : neurons[n_idx].contrib_history[depth]) {
-      DigitalSynapse &syn = connections[c.from_row][c.syn_idx];
-      syn.highlighted = true;
-      // If the source of this spike also spiked at the corresponding time,
-      // trace further.
-      if (neurons[c.from_row].spike_history[depth]) {
-        trace_causal_chain(c.from_row, depth + 1);
+  void trace_causal_chain(int motor_idx) {
+    // We trace back from motor_idx through history.
+    // To avoid exponential explosion, we track which (neuron, depth) we've
+    // visited.
+    std::vector<std::vector<bool>> visited(
+        DigitalNeuron::MAX_HIST, std::vector<bool>(neurons.size(), false));
+
+    struct Pending {
+      int idx;
+      int depth;
+    };
+    std::vector<Pending> stack;
+
+    // If motor spiked in the last step, start tracing from depth 0
+    if (neurons[motor_idx].spike_history[0]) {
+      stack.push_back({motor_idx, 0});
+      visited[0][motor_idx] = true;
+    }
+
+    while (!stack.empty()) {
+      Pending p = stack.back();
+      stack.pop_back();
+
+      if (p.depth >= DigitalNeuron::MAX_HIST)
+        continue;
+
+      // For the given neuron at given depth, highlight all synapses that
+      // contributed to its spike
+      for (const auto &c : neurons[p.idx].contrib_history[p.depth]) {
+        if (c.from_row >= 0 && c.from_row < (int)connections.size()) {
+          connections[c.from_row][c.syn_idx].highlighted = true;
+
+          // If the contributing neuron also spiked at its time, continue
+          // tracing
+          int next_depth = p.depth + 1;
+          if (next_depth < DigitalNeuron::MAX_HIST) {
+            if (neurons[c.from_row].spike_history[next_depth] &&
+                !visited[next_depth][c.from_row]) {
+              visited[next_depth][c.from_row] = true;
+              stack.push_back({c.from_row, next_depth});
+            }
+          }
+        }
       }
     }
   }
