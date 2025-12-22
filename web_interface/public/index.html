@@ -32,6 +32,7 @@
                 <div>Tick: <span id="tick">0</span></div>
                 <div>Food: <span id="food">0</span></div>
                 <div>Danger: <span id="danger">0</span></div>
+                <div>Dist: <span id="distance">0</span></div>
                 <div>Type: <span id="targetType">-</span></div>
             </div>
         </header>
@@ -40,8 +41,16 @@
             <div class="main-layout">
                 <!-- Signal Indicators -->
                 <div class="signal-panel">
-                    <div id="rewardSignal" class="signal reward">REWARD</div>
-                    <div id="penaltySignal" class="signal penalty">PENALTY</div>
+                    <div class="signal-group">
+                        <div id="rewardSignal" class="signal reward">REWARD</div>
+                        <div class="signal-count">R-Sum: <span id="rewardSum">0</span></div>
+                        <div class="signal-count">Food-T: <span id="foodTime">0</span></div>
+                    </div>
+                    <div class="signal-group">
+                        <div id="penaltySignal" class="signal penalty">PENALTY</div>
+                        <div class="signal-count">P-Sum: <span id="penaltySum">0</span></div>
+                        <div class="signal-count">Danger-T: <span id="dangerTime">0</span></div>
+                    </div>
                 </div>
 
                 <!-- Grid for Neurons -->

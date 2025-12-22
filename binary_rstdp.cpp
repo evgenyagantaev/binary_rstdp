@@ -38,13 +38,13 @@ const int CONFIDENCE_MAX = 2;
 const int CONFIDENCE_THR = 1;
 const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 1000;
-const int CONFIDENCE_LEAK_PERIOD = 1300;
+const int CONFIDENCE_LEAK_PERIOD = 5300;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
 const int BRAIN_SIZE = 36; // 4 sensors + 2 motors + 30 hidden
 const int CONSTANT_REWARD_DURATION = 0;
-const double CONNECTION_DENSITY = 0.5;
+const double CONNECTION_DENSITY = 0.1;
 const int CONFIDENCE_INIT_LOW = CONFIDENCE_THR;
 const int CONFIDENCE_INIT_HIGH = CONFIDENCE_MAX;
 const int RANDOM_ACTIVITY_COUNT = 1;
@@ -115,29 +115,39 @@ public:
   }
 
   void connect_randomly(double density, std::mt19937 &rng) {
-    // 1. Deterministic Connection Chains
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    std::uniform_int_distribution<int> conf_dist(CONFIDENCE_INIT_LOW,
+                                                 CONFIDENCE_INIT_HIGH);
 
-    // Chain 1: 0-6-30-4
-    connections[0].emplace_back(6, CONFIDENCE_MAX);
-    connections[6].emplace_back(30, CONFIDENCE_MAX);
-    connections[30].emplace_back(4, CONFIDENCE_MAX);
+    // 1. Deterministic Connections (Sensors and Motors)
+    // Sensor 0 -> 6, 7, 8
+    for (int target : {6, 7, 8})
+      connections[0].emplace_back(target, CONFIDENCE_MAX);
+    // Sensor 2 -> 9, 10, 11
+    for (int target : {9, 10, 11})
+      connections[2].emplace_back(target, CONFIDENCE_MAX);
+    // 30, 31, 32 -> Motor 4
+    for (int source : {30, 31, 32})
+      connections[source].emplace_back(4, CONFIDENCE_MAX);
+    // 33, 34, 35 -> Motor 5
+    for (int source : {33, 34, 35})
+      connections[source].emplace_back(5, CONFIDENCE_MAX);
 
-    // Chain 2: 0-7-25-33-5
-    connections[0].emplace_back(7, CONFIDENCE_MAX);
-    connections[7].emplace_back(25, CONFIDENCE_MAX);
-    connections[25].emplace_back(33, CONFIDENCE_MAX);
-    connections[33].emplace_back(5, CONFIDENCE_MAX);
+    // 2. Random Hidden-to-Hidden Connections (Neurons 6 to 35)
+    std::vector<int> hidden_indices;
+    for (int i = 6; i < (int)neurons.size(); ++i)
+      hidden_indices.push_back(i);
 
-    // Chain 3: 2-9-33-5
-    connections[2].emplace_back(9, CONFIDENCE_MAX);
-    connections[9].emplace_back(33, CONFIDENCE_MAX);
-    connections[33].emplace_back(5, CONFIDENCE_MAX);
-
-    // Chain 4: 2-8-26-30-4
-    connections[2].emplace_back(8, CONFIDENCE_MAX);
-    connections[8].emplace_back(26, CONFIDENCE_MAX);
-    connections[26].emplace_back(30, CONFIDENCE_MAX);
-    connections[30].emplace_back(4, CONFIDENCE_MAX);
+    for (int i : hidden_indices) {
+      for (int j : hidden_indices) {
+        if (i == j)
+          continue;
+        if (dist(rng) < density) {
+          int init_conf = conf_dist(rng);
+          connections[i].emplace_back(j, init_conf);
+        }
+      }
+    }
   }
 
   // sensory_input: number of input spikes per neuron at this timestep
@@ -351,10 +361,14 @@ struct World {
     int choice = type_dist(rng);
     target_timer = time_dist(rng);
 
-    if (choice == 2 || agent_pos <= 0) {
+    // Reset agent to center on target change
+    agent_pos = size / 2;
+
+    if (choice == 2) {
       target_type = NONE;
     } else {
       target_type = (choice == 0) ? FOOD : DANGER;
+      // Spawn target strictly to the LEFT of the agent's reset position
       std::uniform_int_distribution<int> pos_dist(0, agent_pos - 1);
       target_pos = pos_dist(rng);
     }
@@ -392,9 +406,9 @@ struct World {
         agent_pos--;
     }
 
-    if (move_left && agent_pos > 0)
+    if (move_left)
       agent_pos--;
-    if (move_right && agent_pos < size - 1)
+    if (move_right)
       agent_pos++;
 
     WorldUpdateResult res = {false, false};
@@ -423,8 +437,8 @@ struct World {
           res.penalty = true;
           res.reward = false;
         }
-        target_type = NONE;
-        target_timer = 0;
+        // Reset agent to center without removing target
+        agent_pos = size / 2;
       }
     }
 
@@ -472,10 +486,15 @@ void input_listener() {
 }
 
 void print_json_state(const SpikingNet &net, const World &world, int tick,
-                      bool reward, bool penalty) {
+                      bool reward, bool penalty, int reward_sum,
+                      int penalty_sum, int food_time, int danger_time) {
   std::cout << "{";
   std::cout << "\"reward\":" << (reward ? "true" : "false") << ",";
   std::cout << "\"penalty\":" << (penalty ? "true" : "false") << ",";
+  std::cout << "\"reward_sum\":" << reward_sum << ",";
+  std::cout << "\"penalty_sum\":" << penalty_sum << ",";
+  std::cout << "\"food_time\":" << food_time << ",";
+  std::cout << "\"danger_time\":" << danger_time << ",";
   std::cout << "\"t\":" << tick << ",";
 
   std::cout << "\"world\":{";
@@ -483,7 +502,11 @@ void print_json_state(const SpikingNet &net, const World &world, int tick,
   std::cout << "\"target\":" << world.target_pos << ",";
   std::cout << "\"type\":" << world.target_type << ",";
   std::cout << "\"food\":" << world.food_eaten << ",";
-  std::cout << "\"danger\":" << world.danger_hit;
+  std::cout << "\"danger\":" << world.danger_hit << ",";
+  std::cout << "\"dist\":"
+            << ((world.target_type != NONE)
+                    ? std::abs(world.agent_pos - world.target_pos)
+                    : 0);
   std::cout << "},";
 
   std::cout << "\"neurons\":[";
@@ -537,16 +560,16 @@ int main() {
       // Reward/Penalty logic state
       bool current_reward = true; // Initially true during constant duration
       bool current_penalty = false;
+      int reward_sum = 0;
+      int penalty_sum = 0;
+      int food_time = 0;
+      int danger_time = 0;
 
       // --- Simulation Loop ---
       for (int t = 0; g_running && !g_reset; ++t) {
-        // Force world state: Danger at extreme left
-        world.target_type = DANGER;
-        world.target_pos = 0;
-        world.target_timer = 100000;
-
         // Output state FIRST (so we see initial state or current state)
-        print_json_state(brain, world, t, current_reward, current_penalty);
+        print_json_state(brain, world, t, current_reward, current_penalty,
+                         reward_sum, penalty_sum, food_time, danger_time);
 
         // Wait if paused or for speed control
         int delay = g_delay_ms;
@@ -595,14 +618,17 @@ int main() {
         // 4. World Update
         auto res = world.update(m_left, m_right);
 
-        // Check for boundaries to reset
-        if (world.agent_pos >= WORLD_SIZE - 1 || world.agent_pos <= 0) {
-          world.agent_pos = WORLD_SIZE / 2;
-        }
-
         // 5. Update Reward/Penalty for NEXT step
         current_reward = res.reward;
         current_penalty = res.penalty;
+        if (current_reward)
+          reward_sum++;
+        if (current_penalty)
+          penalty_sum++;
+        if (world.target_type == FOOD)
+          food_time++;
+        else if (world.target_type == DANGER)
+          danger_time++;
       }
 
       if (g_reset) {

@@ -139,15 +139,23 @@ h1 {
 .signal-panel {
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 20px;
     padding: 15px;
     background: rgba(30, 41, 59, 0.5);
     border: 1px solid #334155;
     border-radius: 8px;
-    width: 120px;
+    width: 140px;
+}
+
+.signal-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
 }
 
 .signal {
+    width: 100%;
     padding: 10px;
     border-radius: 4px;
     font-weight: bold;
@@ -158,6 +166,12 @@ h1 {
     border: 1px solid #334155;
     transition: all 0.1s ease;
     opacity: 0.5;
+}
+
+.signal-count {
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #94a3b8;
 }
 
 .signal.reward.active {

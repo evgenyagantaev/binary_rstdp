@@ -8,6 +8,11 @@ const tickEl = document.getElementById('tick');
 const foodEl = document.getElementById('food');
 const dangerEl = document.getElementById('danger');
 const targetTypeEl = document.getElementById('targetType');
+const rewardSumEl = document.getElementById('rewardSum');
+const penaltySumEl = document.getElementById('penaltySum');
+const distanceEl = document.getElementById('distance');
+const foodTimeEl = document.getElementById('foodTime');
+const dangerTimeEl = document.getElementById('dangerTime');
 
 const agentEl = document.getElementById('agent');
 const targetEl = document.getElementById('target');
@@ -185,33 +190,48 @@ function updateVisuals(data) {
 
     // 3. Update Stats & World
     if (data.t !== undefined) tickEl.textContent = data.t;
+    if (data.reward_sum !== undefined) rewardSumEl.textContent = data.reward_sum;
+    if (data.penalty_sum !== undefined) penaltySumEl.textContent = data.penalty_sum;
+    if (data.food_time !== undefined) foodTimeEl.textContent = data.food_time;
+    if (data.danger_time !== undefined) dangerTimeEl.textContent = data.danger_time;
 
     if (data.world) {
         foodEl.textContent = data.world.food;
         dangerEl.textContent = data.world.danger;
+        if (data.world.dist !== undefined) distanceEl.textContent = data.world.dist;
 
         const typeMap = { 0: 'NONE', 1: 'FOOD', 2: 'DANGER' };
         targetTypeEl.textContent = typeMap[data.world.type] || '?';
 
-        // Update positions on track (Range 0-30)
-        // Track width is fixed, calculate percentage
+        // Update positions on track (Range 0-30 is visible portion)
         const trackWidth = document.getElementById('worldTrack').clientWidth;
         const scale = (trackWidth - 20) / 30; // -20 for entity size
 
-        agentEl.style.left = (data.world.agent * scale) + 'px';
+        // Agent visibility in visible portion [0, 30]
+        if (data.world.agent >= 0 && data.world.agent <= 30) {
+            agentEl.style.display = 'flex';
+            agentEl.style.left = (data.world.agent * scale) + 'px';
+        } else {
+            agentEl.style.display = 'none';
+        }
 
         if (data.world.type === 0) {
             targetEl.style.display = 'none';
         } else {
-            targetEl.style.display = 'flex';
-            targetEl.style.left = (data.world.target * scale) + 'px';
+            // Target visibility (usually spawned in 0-29 anyway, but let's be safe)
+            if (data.world.target >= 0 && data.world.target <= 30) {
+                targetEl.style.display = 'flex';
+                targetEl.style.left = (data.world.target * scale) + 'px';
 
-            if (data.world.type === 2) { // Danger
-                targetEl.classList.add('danger');
-                targetEl.textContent = 'D';
+                if (data.world.type === 2) { // Danger
+                    targetEl.classList.add('danger');
+                    targetEl.textContent = 'D';
+                } else {
+                    targetEl.classList.remove('danger');
+                    targetEl.textContent = 'F';
+                }
             } else {
-                targetEl.classList.remove('danger');
-                targetEl.textContent = 'F';
+                targetEl.style.display = 'none';
             }
         }
     }
