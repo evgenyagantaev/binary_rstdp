@@ -133,10 +133,14 @@ public:
                                                  CONFIDENCE_INIT_HIGH);
 
     // 1. Deterministic Connections (Sensors and Motors)
-    // Sensor 0 -> 6
+    // Sensor 0 -> 6 (Food-L)
     connections[0].emplace_back(6, CONFIDENCE_MAX, false);
-    // Sensor 2 -> 8
+    // Sensor 1 -> 7 (Food-R)
+    connections[1].emplace_back(7, CONFIDENCE_MAX, false);
+    // Sensor 2 -> 8 (Danger-L)
     connections[2].emplace_back(8, CONFIDENCE_MAX, false);
+    // Sensor 3 -> 9 (Danger-R)
+    connections[3].emplace_back(9, CONFIDENCE_MAX, false);
     // 10 -> Motor 4
     connections[10].emplace_back(4, CONFIDENCE_MAX, false);
     // 11 -> Motor 5
@@ -156,9 +160,9 @@ public:
         if (i >= 6 && i <= 11 && j >= 6 && j <= 11)
           continue;
 
-        // Constraint 2: Neurons 6 and 8 can only HAVE outgoing connections (no
-        // incoming besides sensor)
-        if (j == 6 || j == 8)
+        // Constraint 2: Neurons 6, 7, 8, 9 can only HAVE outgoing connections
+        // (no incoming besides sensor)
+        if (j == 6 || j == 7 || j == 8 || j == 9)
           continue;
 
         // Constraint 3: Neurons 10 and 11 can only HAVE incoming connections
@@ -395,8 +399,8 @@ public:
         if (worst_pre_idx >= 6 && worst_pre_idx <= 11 && j >= 6 && j <= 11)
           continue;
 
-        // Constraint 2: Neurons 6 and 8 can only HAVE outgoing connections
-        if (j == 6 || j == 8)
+        // Constraint 2: Neurons 6, 7, 8, 9 can only HAVE outgoing connections
+        if (j == 6 || j == 7 || j == 8 || j == 9)
           continue;
 
         // Ensure no duplicate
@@ -552,10 +556,12 @@ struct World {
 
     if (choice == 2) {
       target_type = NONE;
+      target_timer /= 3; // NONE phase is 3x shorter
     } else {
       target_type = (choice == 0) ? FOOD : DANGER;
-      // Fixed spawn at the extreme left of the visible world
-      target_pos = 0;
+      // Randomly spawn at extreme left (0) or extreme right (size-1)
+      std::uniform_int_distribution<int> edge_dist(0, 1);
+      target_pos = (edge_dist(rng) == 0) ? 0 : size - 1;
     }
   }
 

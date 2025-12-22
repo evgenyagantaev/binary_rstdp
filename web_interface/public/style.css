@@ -244,7 +244,7 @@ h1 {
 
 .sensor-label {
     position: absolute;
-    top: -20px;
+    top: -18px;
     left: 50%;
     transform: translateX(-50%);
     font-size: 10px;

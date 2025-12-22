@@ -46,17 +46,19 @@ function initGrid() {
 
 
         // Assign types
-        if (i === 1 || i === 3) el.classList.add('disabled');
-        else if (i < 4) {
+        if (i < 4) {
             el.classList.add('sensor');
             const label = document.createElement('div');
             label.classList.add('sensor-label');
-            const labels = ['F-L', 'F-R', 'D-L', 'D-R'];
-            label.textContent = labels[i];
+            const labels = ['FOOD LEFT', 'FOOD RIGHT', 'DANGER LEFT', 'DANGER RIGHT'];
+            label.textContent = labels[i] || '';
             el.appendChild(label);
         }
         else if (i === 4) el.classList.add('motor', 'motor-left');
         else if (i === 5) el.classList.add('motor', 'motor-right');
+        else {
+            el.classList.add('hidden');
+        }
 
         neuronGrid.appendChild(el);
         neurons.push({ id: i, el, v: 0 });
