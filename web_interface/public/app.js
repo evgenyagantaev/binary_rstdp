@@ -127,24 +127,22 @@ function drawSynapses() {
         ctx.lineTo(target.x, target.y);
 
         if (conn.b) {
-            // Causal Chain: Bright Blue, Thick
-            ctx.strokeStyle = '#3b82f6';
+            // Causal Chain: Blue gradient, Thick
+            const grad = ctx.createLinearGradient(source.x, source.y, target.x, target.y);
+            grad.addColorStop(0, '#60a5fa'); // Light Blue
+            grad.addColorStop(1, '#1d4ed8'); // Dark Blue
+            ctx.strokeStyle = grad;
             ctx.lineWidth = 18;
-        } else if (conn.s < 4) {
-            // Sensory Outgoing: Yellow
-            ctx.strokeStyle = '#facc15';
-            ctx.lineWidth = 1.5;
-        } else if (conn.t >= 4 && conn.t < 6) {
-            // Motor Incoming: Green
-            ctx.strokeStyle = '#22c55e';
-            ctx.lineWidth = 1.5;
         } else if (conn.a) {
-            // Other Active: Red, Opaque
-            ctx.strokeStyle = 'rgba(239, 68, 68, 1.0)';
-            ctx.lineWidth = 1.5;
+            // Active: Yellow to Red gradient
+            const grad = ctx.createLinearGradient(source.x, source.y, target.x, target.y);
+            grad.addColorStop(0, '#facc15'); // Yellow (Pre)
+            grad.addColorStop(1, '#ef4444'); // Red (Post)
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 2.0;
         } else {
-            // Inactive: White, visible
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            // Inactive: White, subtle
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
             ctx.lineWidth = 1;
         }
 

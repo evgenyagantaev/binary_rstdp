@@ -172,6 +172,26 @@ public:
         }
       }
     }
+
+    // Ensure neurons 10 and 11 always have at least one input
+    for (int target : {10, 11}) {
+      bool has_input = false;
+      for (const auto &row : connections) {
+        for (const auto &syn : row) {
+          if (syn.target_neuron_idx == target) {
+            has_input = true;
+            break;
+          }
+        }
+        if (has_input)
+          break;
+      }
+      if (!has_input) {
+        // Add one from a hidden neuron (12-29) to avoid constraints
+        std::uniform_int_distribution<int> src_dist(12, 29);
+        connections[src_dist(rng)].emplace_back(target, CONFIDENCE_THR);
+      }
+    }
   }
 
   // sensory_input: number of input spikes per neuron at this timestep
@@ -395,6 +415,23 @@ public:
         std::uniform_int_distribution<int> t_dist(0,
                                                   possible_targets.size() - 1);
         int new_target = possible_targets[t_dist(rng)];
+
+        // Constraint: If current target is 10 or 11, check if this is the only
+        // connection
+        if (worst_syn->target_neuron_idx == 10 ||
+            worst_syn->target_neuron_idx == 11) {
+          int count = 0;
+          for (const auto &row : connections) {
+            for (const auto &s : row) {
+              if (s.target_neuron_idx == worst_syn->target_neuron_idx)
+                count++;
+            }
+          }
+          if (count <= 1) {
+            // Can't move it away. Effectively just reset it on current target.
+            new_target = worst_syn->target_neuron_idx;
+          }
+        }
 
         // Prune and Rewire
         worst_syn->target_neuron_idx = new_target;
