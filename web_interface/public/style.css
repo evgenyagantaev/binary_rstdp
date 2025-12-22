@@ -319,28 +319,30 @@ h1 {
 }
 
 .entity {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
+    width: 32px;
+    height: 32px;
     position: absolute;
-    top: 10px;
-    /* Vertically centered */
+    top: 4px;
+    /* Vertically centered in 40px track */
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: bold;
-    font-size: 10px;
+    font-size: 24px;
     transition: left 0.05s linear;
+    z-index: 10;
+    text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
 }
 
 .entity.agent {
-    background-color: #3b82f6;
+    /* Worm icon doesn't need bg */
+    /* background-color: #3b82f6; */
     /* Blue */
     color: white;
 }
 
 .entity.target {
-    background-color: #eab308;
+    /* Apple/Skull icons don't need bg */
+    /* background-color: #eab308; */
     /* Yellow/Gold */
     color: black;
 }

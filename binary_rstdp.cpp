@@ -34,7 +34,7 @@ const int REFRACTORY_PERIOD = 1;
 const int MEMBRANE_DECAY_PERIOD = 750;
 
 // --- Synapse / R-STDP parameters ---
-const int CONFIDENCE_MAX = 2;
+const int CONFIDENCE_MAX = 5;
 const int CONFIDENCE_THR = 1;
 const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 1000;

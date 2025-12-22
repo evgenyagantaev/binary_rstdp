@@ -225,10 +225,10 @@ function updateVisuals(data) {
 
                 if (data.world.type === 2) { // Danger
                     targetEl.classList.add('danger');
-                    targetEl.textContent = 'D';
+                    targetEl.textContent = '☠️';
                 } else {
                     targetEl.classList.remove('danger');
-                    targetEl.textContent = 'F';
+                    targetEl.textContent = '🍎';
                 }
             } else {
                 targetEl.style.display = 'none';
