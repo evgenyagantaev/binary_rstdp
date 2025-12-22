@@ -49,7 +49,7 @@ const double CONNECTION_DENSITY = 0.1;
 const int CONFIDENCE_INIT_LOW = CONFIDENCE_THR;
 const int CONFIDENCE_INIT_HIGH = CONFIDENCE_MAX;
 const int RANDOM_ACTIVITY_COUNT = 1;
-const int RANDOM_ACTIVITY_PERIOD = 2;
+const int RANDOM_ACTIVITY_PERIOD = 5;
 
 // --- Data structures ---
 
@@ -128,18 +128,14 @@ public:
                                                  CONFIDENCE_INIT_HIGH);
 
     // 1. Deterministic Connections (Sensors and Motors)
-    // Sensor 0 -> 6, 7, 8
-    for (int target : {6, 7, 8})
-      connections[0].emplace_back(target, CONFIDENCE_MAX);
-    // Sensor 2 -> 9, 10, 11
-    for (int target : {9, 10, 11})
-      connections[2].emplace_back(target, CONFIDENCE_MAX);
-    // 30, 31, 32 -> Motor 4
-    for (int source : {30, 31, 32})
-      connections[source].emplace_back(4, CONFIDENCE_MAX);
-    // 33, 34, 35 -> Motor 5
-    for (int source : {33, 34, 35})
-      connections[source].emplace_back(5, CONFIDENCE_MAX);
+    // Sensor 0 -> 6
+    connections[0].emplace_back(6, CONFIDENCE_MAX);
+    // Sensor 2 -> 8
+    connections[2].emplace_back(8, CONFIDENCE_MAX);
+    // 10 -> Motor 4
+    connections[10].emplace_back(4, CONFIDENCE_MAX);
+    // 11 -> Motor 5
+    connections[11].emplace_back(5, CONFIDENCE_MAX);
 
     // 2. Random Hidden-to-Hidden Connections (Neurons 6 to 35)
     std::vector<int> hidden_indices;
@@ -151,12 +147,8 @@ public:
         if (i == j)
           continue;
 
-        // Constraint 1: Post-sensory (6-11) can't connect to each other
+        // Constraint: First layer (6-11) can't connect to each other
         if (i >= 6 && i <= 11 && j >= 6 && j <= 11)
-          continue;
-
-        // Constraint 2: Pre-motor (30-35) can't connect to each other
-        if (i >= 30 && i <= 35 && j >= 30 && j <= 35)
           continue;
 
         if (dist(rng) < density) {
@@ -364,10 +356,11 @@ public:
     if (!neurons[motor_idx].spiked_this_step)
       return;
 
-    // visited[depth] maps to history: depth 0 is current (T), depth 1 is T-1,
-    // etc.
+    // We trace back to show what CAUSED the current motor spike.
+    // Limit depth to 12 for cleaner visualization (enough for direct paths).
+    const int MAX_TRACE = 12;
     std::vector<std::vector<bool>> visited(
-        DigitalNeuron::MAX_HIST + 1, std::vector<bool>(neurons.size(), false));
+        MAX_TRACE + 1, std::vector<bool>(neurons.size(), false));
 
     struct Pending {
       int idx;
@@ -382,41 +375,25 @@ public:
       Pending p = stack.back();
       stack.pop_back();
 
-      if (p.depth == 0) {
-        // Current spike at T, use its immediate contributors
-        for (const auto &c : neurons[p.idx].next_contributors) {
-          if (c.from_row >= 0 && c.from_row < (int)connections.size()) {
-            connections[c.from_row][c.syn_idx].highlighted = true;
-            // Parents of current spike must have spiked at T-1
-            // T-1 is stored in spike_history[0] (we are at step T)
-            if (neurons[c.from_row].spike_history[0] &&
-                !visited[1][c.from_row]) {
-              visited[1][c.from_row] = true;
-              stack.push_back({c.from_row, 1});
-            }
-          }
-        }
-      } else {
-        // Ancestor spike at T - p.depth. Its contributors are in
-        // contrib_history[p.depth - 1]
-        int hist_idx = p.depth - 1;
-        if (hist_idx >= DigitalNeuron::MAX_HIST)
-          continue;
+      if (p.depth >= MAX_TRACE)
+        continue;
 
-        for (const auto &c : neurons[p.idx].contrib_history[hist_idx]) {
-          if (c.from_row >= 0 && c.from_row < (int)connections.size()) {
-            connections[c.from_row][c.syn_idx].highlighted = true;
+      // Spike at depth 'p.depth' was caused by signals in
+      // contrib_history[p.depth] (these signals were sent at time T - p.depth -
+      // 1).
+      for (const auto &c : neurons[p.idx].contrib_history[p.depth]) {
+        if (c.from_row >= 0 && c.from_row < (int)connections.size()) {
+          connections[c.from_row][c.syn_idx].highlighted = true;
 
-            int next_depth = p.depth + 1;
-            // Ancestors of T-p.depth spiked at T-(p.depth+1)
-            // T-(p.depth+1) is in spike_history[p.depth]
-            if (next_depth <= DigitalNeuron::MAX_HIST &&
-                p.depth < DigitalNeuron::MAX_HIST) {
-              if (neurons[c.from_row].spike_history[p.depth] &&
-                  !visited[next_depth][c.from_row]) {
-                visited[next_depth][c.from_row] = true;
-                stack.push_back({c.from_row, next_depth});
-              }
+          int next_depth = p.depth + 1;
+          // The sender must have spiked at T - next_depth.
+          // Before the end-of-step shift, spike_history[p.depth] contains T -
+          // (p.depth + 1).
+          if (next_depth <= MAX_TRACE) {
+            if (neurons[c.from_row].spike_history[p.depth] &&
+                !visited[next_depth][c.from_row]) {
+              visited[next_depth][c.from_row] = true;
+              stack.push_back({c.from_row, next_depth});
             }
           }
         }
