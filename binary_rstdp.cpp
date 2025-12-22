@@ -40,6 +40,7 @@ const int SPIKE_TRACE_WINDOW = 10;
 const int ELIGIBILITY_TRACE_WINDOW = 100;
 const int CONFIDENCE_LEAK_PERIOD = 5300;
 const int REINFORCEMENT_INERTIA_PERIOD = 10;
+const int PRUNING_PERIOD = 150;
 
 // Simulation Constants
 const int WORLD_SIZE = 30;
@@ -73,14 +74,18 @@ struct DigitalSynapse {
   int reward_inertia_counter;
   int penalty_inertia_counter;
 
-  DigitalSynapse(int target, int init_conf = 1)
+  int ticks_since_ltp;
+  bool plastic;
+
+  DigitalSynapse(int target, int init_conf = 1, bool _plastic = true)
       : target_neuron_idx(target), confidence(init_conf),
         active(init_conf >= CONFIDENCE_THR), ltp_timer(0), ltd_timer(0),
         eligible_for_LTP(false), eligible_for_LTD(false),
         eligibility_ltp_timer(0), eligibility_ltd_timer(0),
         confidence_leak_timer(CONFIDENCE_LEAK_PERIOD), highlighted(false),
         reward_acceptor(true), penalty_acceptor(true),
-        reward_inertia_counter(0), penalty_inertia_counter(0) {}
+        reward_inertia_counter(0), penalty_inertia_counter(0),
+        ticks_since_ltp(0), plastic(_plastic) {}
 };
 
 struct DigitalNeuron {
@@ -129,13 +134,13 @@ public:
 
     // 1. Deterministic Connections (Sensors and Motors)
     // Sensor 0 -> 6
-    connections[0].emplace_back(6, CONFIDENCE_MAX);
+    connections[0].emplace_back(6, CONFIDENCE_MAX, false);
     // Sensor 2 -> 8
-    connections[2].emplace_back(8, CONFIDENCE_MAX);
+    connections[2].emplace_back(8, CONFIDENCE_MAX, false);
     // 10 -> Motor 4
-    connections[10].emplace_back(4, CONFIDENCE_MAX);
+    connections[10].emplace_back(4, CONFIDENCE_MAX, false);
     // 11 -> Motor 5
-    connections[11].emplace_back(5, CONFIDENCE_MAX);
+    connections[11].emplace_back(5, CONFIDENCE_MAX, false);
 
     // 2. Random Hidden-to-Hidden Connections (Neurons 6 to 35)
     std::vector<int> hidden_indices;
@@ -147,8 +152,18 @@ public:
         if (i == j)
           continue;
 
-        // Constraint: First layer (6-11) can't connect to each other
+        // Constraint 1: First layer (6-11) can't connect to each other
         if (i >= 6 && i <= 11 && j >= 6 && j <= 11)
+          continue;
+
+        // Constraint 2: Neurons 6 and 8 can only HAVE outgoing connections (no
+        // incoming besides sensor)
+        if (j == 6 || j == 8)
+          continue;
+
+        // Constraint 3: Neurons 10 and 11 can only HAVE incoming connections
+        // (no outgoing besides motor)
+        if (i == 10 || i == 11)
           continue;
 
         if (dist(rng) < density) {
@@ -163,7 +178,7 @@ public:
   // reward_active: true if global reward signal is present
   // penalty_active: true if global penalty signal is present
   void step(const std::vector<int> &sensory_input, bool reward_active,
-            bool penalty_active) {
+            bool penalty_active, std::mt19937 &rng) {
     ++global_tick;
     // 0. Update highlights and tick
     for (auto &row : connections) {
@@ -217,7 +232,11 @@ public:
       }
     }
 
-    // 2. Propagate
+    // 2. Propagate and evaluate plastic synapses
+    DigitalSynapse *worst_syn = nullptr;
+    int max_inactive = -1;
+    int worst_pre_idx = -1;
+
     for (int i = 0; i < static_cast<int>(neurons.size()); ++i) {
       auto &synapses = connections[i];
       for (auto &syn : synapses) {
@@ -227,10 +246,20 @@ public:
               {i, (int)(&syn - &synapses[0])});
         }
 
-        bool is_fixed = (i < 4) || (syn.target_neuron_idx >= 4 &&
-                                    syn.target_neuron_idx < 6);
+        if (syn.plastic) {
+          syn.ticks_since_ltp++;
 
-        if (!is_fixed) {
+          // Reset inactivity counter on LTP attempt (Reward + Eligible)
+          if (reward_active && syn.reward_acceptor && syn.eligible_for_LTP) {
+            syn.ticks_since_ltp = 0;
+          }
+
+          if (syn.ticks_since_ltp > max_inactive) {
+            max_inactive = syn.ticks_since_ltp;
+            worst_syn = &syn;
+            worst_pre_idx = i;
+          }
+
           // Decay timers
           if (syn.ltp_timer > 0)
             syn.ltp_timer--;
@@ -332,6 +361,56 @@ public:
             syn.confidence_leak_timer = CONFIDENCE_LEAK_PERIOD;
           }
         }
+      }
+    }
+
+    // 2.5 Pruning: Rewire the most inactive synapse periodically
+    if (worst_syn && (global_tick % PRUNING_PERIOD == 0)) {
+      std::vector<int> possible_targets;
+      // Potential targets: ONLY Hidden (6-35). Motors (4,5) are fixed.
+      for (int j = 6; j < static_cast<int>(neurons.size()); ++j) {
+        if (j == worst_pre_idx)
+          continue;
+        // Constraint 1: First layer (6-11) can't connect to each other
+        if (worst_pre_idx >= 6 && worst_pre_idx <= 11 && j >= 6 && j <= 11)
+          continue;
+
+        // Constraint 2: Neurons 6 and 8 can only HAVE outgoing connections
+        if (j == 6 || j == 8)
+          continue;
+
+        // Ensure no duplicate
+        bool exists = false;
+        for (const auto &s : connections[worst_pre_idx]) {
+          if (s.target_neuron_idx == j) {
+            exists = true;
+            break;
+          }
+        }
+        if (!exists)
+          possible_targets.push_back(j);
+      }
+
+      if (!possible_targets.empty()) {
+        std::uniform_int_distribution<int> t_dist(0,
+                                                  possible_targets.size() - 1);
+        int new_target = possible_targets[t_dist(rng)];
+
+        // Prune and Rewire
+        worst_syn->target_neuron_idx = new_target;
+        worst_syn->confidence = 1; // Start fresh
+        worst_syn->active = (worst_syn->confidence >= CONFIDENCE_THR);
+        worst_syn->ticks_since_ltp = 0; // Reset timer
+
+        // Reset plastic state
+        worst_syn->ltp_timer = 0;
+        worst_syn->ltd_timer = 0;
+        worst_syn->eligible_for_LTP = false;
+        worst_syn->eligible_for_LTD = false;
+        worst_syn->eligibility_ltp_timer = 0;
+        worst_syn->eligibility_ltd_timer = 0;
+        worst_syn->reward_acceptor = true;
+        worst_syn->penalty_acceptor = true;
       }
     }
 
@@ -674,7 +753,7 @@ int main() {
         // 5. Brain Step
         bool force_reward = false;
         brain.step(net_input, force_reward || current_reward,
-                   (!force_reward) && current_penalty);
+                   (!force_reward) && current_penalty, rng);
 
         // 3. Motors
         bool m_left = brain.neurons[4].spiked_this_step;
