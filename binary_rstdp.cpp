@@ -52,6 +52,14 @@ const int CONFIDENCE_INIT_HIGH = CONFIDENCE_MAX;
 const int RANDOM_ACTIVITY_COUNT = 1;
 const int RANDOM_ACTIVITY_PERIOD = 5;
 
+// --- SIMULATION CONTROL (Globals) ---
+std::atomic<bool> g_paused(true); // Start paused
+std::atomic<bool> g_reset(false);
+std::atomic<int> g_delay_ms(500);
+std::atomic<bool> g_running(true);
+std::atomic<int>
+    g_reward_mode(0); // 0: Normal, 1: Inverse, 2: All Danger, 3: All Reward
+
 // --- Data structures ---
 
 struct DigitalSynapse {
@@ -588,13 +596,6 @@ struct World {
     int prev_dist = -1;
     if (target_type != NONE) {
       prev_dist = std::abs(agent_pos - target_pos);
-    } else {
-      // Force move to middle when no target exists
-      int mid = size / 2;
-      if (agent_pos < mid)
-        agent_pos++;
-      else if (agent_pos > mid)
-        agent_pos--;
     }
 
     if (move_left)
@@ -602,27 +603,48 @@ struct World {
     if (move_right)
       agent_pos++;
 
+    // Teleport to center if out of bounds
+    if (agent_pos < 0 || agent_pos >= size) {
+      agent_pos = size / 2;
+      // If it was teleported, we skip reward/penalty for this specific frame
+      // to avoid weird distance jumps.
+      return {false, false};
+    }
+
     WorldUpdateResult res = {false, false};
     if (target_type != NONE) {
       int curr_dist = std::abs(agent_pos - target_pos);
+      int mode = g_reward_mode;
 
+      // Determine if current target is "Edible" or "Hazardous" based on mode
+      bool is_hazardous = false;
       if (target_type == FOOD) {
-        if (curr_dist < prev_dist)
-          res.reward = true;
-        else if (curr_dist > prev_dist)
-          res.penalty = true;
+        if (mode == 1 || mode == 2)
+          is_hazardous = true;
       } else if (target_type == DANGER) {
+        if (mode == 0 || mode == 2)
+          is_hazardous = true;
+      }
+
+      if (is_hazardous) {
+        // Hazardous logic: avvicinarsi è male, allontanarsi è bene
         if (curr_dist > prev_dist)
           res.reward = true;
         else if (curr_dist < prev_dist)
           res.penalty = true;
+      } else {
+        // Edible logic: avvicinarsi è bene, allontanarsi è male
+        if (curr_dist < prev_dist)
+          res.reward = true;
+        else if (curr_dist > prev_dist)
+          res.penalty = true;
       }
 
       if (curr_dist == 0) {
-        if (target_type == FOOD) {
+        if (!is_hazardous) {
           food_eaten++;
           res.reward = true;
-          res.penalty = false; // Reward takes precedence
+          res.penalty = false;
         } else {
           danger_hit++;
           res.penalty = true;
@@ -642,12 +664,6 @@ struct World {
     return res;
   }
 };
-
-// --- SIMULATION CONTROL ---
-std::atomic<bool> g_paused(true); // Start paused
-std::atomic<bool> g_reset(false);
-std::atomic<int> g_delay_ms(500);
-std::atomic<bool> g_running(true);
 
 void input_listener() {
   std::string cmd;
@@ -671,6 +687,17 @@ void input_listener() {
         if (val < 0)
           val = 0;
         g_delay_ms = val;
+      }
+    } else if (cmd == "mode") {
+      int val;
+      if (std::cin >> val) {
+        log_to_file("Reward mode received: " + std::to_string(val));
+        std::cerr << "[CPP] Reward mode: " << val << std::endl;
+        if (val < 0)
+          val = 0;
+        if (val > 3)
+          val = 3;
+        g_reward_mode = val;
       }
     }
   }

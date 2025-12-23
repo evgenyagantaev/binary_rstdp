@@ -319,6 +319,16 @@ function updateSpeed(val) {
 speedRange.addEventListener('input', (e) => updateSpeed(e.target.value));
 speedInput.addEventListener('input', (e) => updateSpeed(e.target.value));
 
+// Reward Mode controls
+document.querySelectorAll('input[name="mode"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            socket.send('mode ' + e.target.value);
+            console.log('[UI] Sending reward mode:', e.target.value);
+        }
+    });
+});
+
 // Handle window resize
 window.addEventListener('resize', updatePositions);
 
