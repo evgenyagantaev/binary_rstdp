@@ -49,9 +49,11 @@ To prevent the network from getting stuck in local minima, the system implements
    ```
 
 2. **Compile the Backend:**
-   ```bash
-   g++ -O3 binary_rstdp.cpp -o binary_rstdp -lpthread
-   ```
+   - **Easy (Windows):** Open the project in **Visual Studio** and build as a `Visual Studio Solution`. This is the recommended way for Windows users.
+   - **CLI (Linux/Generic):**
+     ```bash
+     g++ -O3 binary_rstdp.cpp -o binary_rstdp -lpthread
+     ```
 
 3. **Install dependencies and start the UI:**
    ```bash
