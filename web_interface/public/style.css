@@ -304,8 +304,26 @@ h1 {
 /* World View */
 .world-view {
     margin-top: 40px;
-    width: 600px;
+    width: 1200px;
     text-align: center;
+}
+
+.world-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+    padding: 0 10px;
+}
+
+.world-dist {
+    font-family: monospace;
+    font-size: 1.2rem;
+    color: #94a3b8;
+    background: #1e293b;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid #334155;
 }
 
 .world-track {

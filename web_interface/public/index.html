@@ -32,7 +32,6 @@
                 <div>Tick: <span id="tick">0</span></div>
                 <div>Food: <span id="food">0</span></div>
                 <div>Danger: <span id="danger">0</span></div>
-                <div>Dist: <span id="distance">0</span></div>
                 <div>Type: <span id="targetType">-</span></div>
             </div>
         </header>
@@ -64,7 +63,10 @@
 
             <!-- World View (Agent & Target) -->
             <div class="world-view">
-                <h2>World Simulation</h2>
+                <div class="world-header">
+                    <h2>World Simulation</h2>
+                    <div class="world-dist">Distance: <span id="distance">0</span></div>
+                </div>
                 <div id="worldTrack" class="world-track">
                     <div id="agent" class="entity agent">🐛</div>
                     <div id="target" class="entity target">🍎</div>

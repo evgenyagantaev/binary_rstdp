@@ -29,6 +29,7 @@ let initializedCoords = false;
 // State
 let neurons = []; // { id, el, x, y, v }
 let connections = []; // { from, to, active, conf } - we'll update this from server
+let lastFoodEaten = 0;
 
 // Initialize Grid Layout
 function initGrid() {
@@ -200,15 +201,22 @@ function updateVisuals(data) {
         dangerEl.textContent = data.world.danger;
         if (data.world.dist !== undefined) distanceEl.textContent = data.world.dist;
 
+        // Visual effect on eating apple
+        if (data.world.food > lastFoodEaten) {
+            agentEl.classList.add('eating');
+            setTimeout(() => agentEl.classList.remove('eating'), 500);
+            lastFoodEaten = data.world.food;
+        }
+
         const typeMap = { 0: 'NONE', 1: 'FOOD', 2: 'DANGER' };
         targetTypeEl.textContent = typeMap[data.world.type] || '?';
 
-        // Update positions on track (Range 0-30 is visible portion)
+        // Update positions on track (Range 0-60 is visible portion)
         const trackWidth = document.getElementById('worldTrack').clientWidth;
-        const scale = (trackWidth - 20) / 30; // -20 for entity size
+        const scale = (trackWidth - 40) / 60; // -40 for entity size margin
 
-        // Agent visibility in visible portion [0, 30]
-        if (data.world.agent >= 0 && data.world.agent <= 30) {
+        // Agent visibility in visible portion [0, 60]
+        if (data.world.agent >= 0 && data.world.agent <= 60) {
             agentEl.style.display = 'flex';
             agentEl.style.left = (data.world.agent * scale) + 'px';
         } else {
@@ -218,8 +226,8 @@ function updateVisuals(data) {
         if (data.world.type === 0) {
             targetEl.style.display = 'none';
         } else {
-            // Target visibility (usually spawned in 0-29 anyway, but let's be safe)
-            if (data.world.target >= 0 && data.world.target <= 30) {
+            // Target visibility (ranged [0, 60])
+            if (data.world.target >= 0 && data.world.target <= 60) {
                 targetEl.style.display = 'flex';
                 targetEl.style.left = (data.world.target * scale) + 'px';
 
