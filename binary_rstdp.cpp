@@ -44,7 +44,7 @@ const int PRUNING_PERIOD = 150;
 
 // Simulation Constants
 const int WORLD_SIZE = 60;
-const int BRAIN_SIZE = 36; // 4 sensors + 2 motors + 30 hidden
+const int BRAIN_SIZE = 60; // 4 sensors + 2 motors + 30 hidden
 const int CONSTANT_REWARD_DURATION = 0;
 const double CONNECTION_DENSITY = 0.1;
 const int CONFIDENCE_INIT_LOW = CONFIDENCE_THR;
